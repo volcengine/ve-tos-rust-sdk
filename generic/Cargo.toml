@@ -1,0 +1,15 @@
+[package]
+name = "ve-tos-generic"
+version = "0.0.7"
+edition = "2021"
+authors = ["xiangshijian"]
+description = "generic lib for volcengine offical tos rust sdk"
+license = "Apache-2.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = "1.0.35"
+syn = { version = "2.0.48", features = ["full"] }
