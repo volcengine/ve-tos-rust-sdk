@@ -370,6 +370,8 @@ pub struct UploadPartInput<B>
 
 unsafe impl<B> Sync for UploadPartInput<B> {}
 
+unsafe impl<B> Send for UploadPartInput<B> {}
+
 impl<B> InputDescriptor for UploadPartInput<B>
 {
     fn operation(&self) -> &str {
