@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -459,7 +460,7 @@ where
                 request.method = HttpMethodPut;
                 request.query = Some(HashMap::from([("cors", "".to_string())]));
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -819,7 +820,7 @@ where
                 if self.allow_same_action_overlap {
                     request.header.insert(HEADER_ALLOW_SAME_ACTION_OVERLAP, TRUE.to_string());
                 }
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -1455,7 +1456,7 @@ where
         request.query = Some(HashMap::from([("policy", "".to_string())]));
         request.method = HttpMethodPut;
         request.header.insert(HEADER_CONTENT_MD5, base64_md5(&self.policy));
-        let (body, len) = B::new(self.policy.clone().into_bytes())?;
+        let (body, len) = B::new(Bytes::from(self.policy.clone().into_bytes()))?;
         request.body = Some(body);
         request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
         Ok(request)
@@ -1606,7 +1607,7 @@ where
                 request.method = HttpMethodPut;
                 request.query = Some(HashMap::from([("mirror", "".to_string())]));
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -2532,7 +2533,7 @@ where
             match serde_json::to_string(self) {
                 Err(e) => return Err(TosError::client_error_with_cause("trans json error", GenericError::JsonError(e.to_string()))),
                 Ok(json) => {
-                    let (body, len) = B::new(json.into_bytes())?;
+                    let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                     request.body = Some(body);
                     request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 }
@@ -2683,7 +2684,7 @@ where
                 request.method = HttpMethodPut;
                 request.query = Some(HashMap::from([("replication", "".to_string())]));
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -3047,7 +3048,7 @@ where
                 request.method = HttpMethodPut;
                 request.query = Some(HashMap::from([("versioning", "".to_string())]));
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -3176,7 +3177,7 @@ where
                 request.method = HttpMethodPut;
                 request.query = Some(HashMap::from([("website", "".to_string())]));
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -3570,7 +3571,7 @@ where
                 request.method = HttpMethodPut;
                 request.query = Some(HashMap::from([("customdomain", "".to_string())]));
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -3808,7 +3809,7 @@ where
                 request.method = HttpMethodPut;
                 request.query = Some(HashMap::from([("realtimeLog", "".to_string())]));
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -4043,7 +4044,7 @@ where
                 request.method = HttpMethodPut;
                 request.query = Some(HashMap::from([("rename", "".to_string())]));
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -4182,7 +4183,7 @@ where
                 request.method = HttpMethodPut;
                 request.query = Some(HashMap::from([("encryption", "".to_string())]));
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -4372,7 +4373,7 @@ where
                 request.method = HttpMethodPut;
                 request.query = Some(HashMap::from([("tagging", "".to_string())]));
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -4519,7 +4520,7 @@ where
                 request.method = HttpMethodPut;
                 request.query = Some(HashMap::from([("notification_v2", "".to_string())]));
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -5110,7 +5111,7 @@ where
                 query.insert("id", self.id.to_string());
                 request.query = Some(query);
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -5918,7 +5919,7 @@ where
                 query.insert("accessmonitor", "".to_string());
                 request.query = Some(query);
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -6031,7 +6032,7 @@ where
                 query.insert("trash", "".to_string());
                 request.query = Some(query);
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)

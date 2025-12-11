@@ -13,14 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use bytes::BytesMut;
+use chrono::Utc;
+use scopeguard::defer;
 use std::collections::HashMap;
 use std::env;
+use std::fmt::Write;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-
-use chrono::Utc;
-use scopeguard::defer;
 use tokio::fs::File;
 use tokio::runtime::Handle;
 use tokio::{fs, runtime};
@@ -73,7 +74,34 @@ fn test_main() {
         test_rename_object(&context).await;
         test_restore_object(&context).await;
         test_symlink(&context).await;
+        test_multi_contents(&context).await;
     });
+}
+
+async fn test_multi_contents(context: &AsyncContext) {
+    let client = context.client();
+    let bucket = context.fixed_bucket();
+    let key = gen_random_string(10);
+    let key = key.as_str();
+    let data = "hello world";
+    let mut input = PutObjectFromBufferInput::new(bucket, key);
+    input.append_content_nocopy(data);
+    input.append_content_nocopy(data);
+
+    let o = client.put_object_from_buffer(&input).await.unwrap();
+    assert!(o.request_id().len() > 0);
+
+    let ginput = GetObjectInput::new(bucket, key);
+    let mut o = client.get_object(&ginput).await.unwrap();
+    assert!(o.request_id().len() > 0);
+    assert!(o.etag().len() > 0);
+    let buf = read_to_buf(o.content().unwrap()).await;
+    let mut new_data = String::with_capacity(data.len() * 3);
+    new_data.push_str(data);
+    new_data.push_str(data);
+    let readed_data = String::from_utf8(buf).unwrap();
+    assert_eq!(readed_data, new_data);
+    println!("{}", readed_data);
 }
 
 async fn test_symlink(context: &AsyncContext) {
@@ -1222,6 +1250,39 @@ async fn test_put_object(context: &AsyncContext) {
 
     let key = gen_random_string(10);
     let key = key.as_str();
+
+    // 测试 buffer
+    let mut buf1 = BytesMut::with_capacity(8 * 1024 * 1024);
+    buf1.write_str("helloworld");
+    let buf1 = buf1.freeze();
+    let mut buf2 = BytesMut::with_capacity(8 * 1024 * 1024);
+    buf2.write_str("hiworld");
+    let buf2 = buf2.freeze();
+    let bytes_list = vec![buf1, buf2];
+    let bytes_list2 = bytes_list.clone();
+    {
+        let mut input = PutObjectFromBufferInput::new(bucket, key);
+        input.set_content_with_bytes_list(bytes_list.into_iter());
+        let o = client.put_object_from_buffer(&input).await.unwrap();
+        assert!(o.request_id().len() > 0);
+
+        let mut o = client.get_object(&GetObjectInput::new(bucket, key)).await.unwrap();
+        assert!(o.request_id().len() > 0);
+        assert!(o.etag().len() > 0);
+        let buf = read_to_string(o.content().unwrap()).await;
+        assert_eq!(buf, "helloworldhiworld");
+    }
+    let mut idx = 0;
+    for buf in bytes_list2 {
+        let buf_mut = buf.try_into_mut().unwrap();
+        if idx == 0 {
+            assert_eq!("helloworld", String::from_utf8_lossy(&buf_mut));
+        } else {
+            assert_eq!("hiworld", String::from_utf8_lossy(&buf_mut));
+        }
+        idx += 1;
+    }
+
 
     let stream_data = new_stream(data);
     // 所有参数上传对象

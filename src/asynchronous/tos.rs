@@ -13,29 +13,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use crate::asynchronous::auth::SignerAPI;
 use crate::asynchronous::bucket::BucketAPI;
 use crate::asynchronous::common::DataTransferListener;
 use crate::asynchronous::control::ControlAPI;
+use crate::asynchronous::credential::CredentialsProvider;
 use crate::asynchronous::http::HttpResponse;
 use crate::asynchronous::internal::{AsyncInputTranslator, OutputParser};
 use crate::asynchronous::multipart::MultipartAPI;
 use crate::asynchronous::object::ObjectAPI;
 use crate::asynchronous::paginator::PaginatorAPI;
 use crate::asynchronous::reader::StreamVec;
-use crate::auth::{pre_signed_policy_url, pre_signed_post_signature, pre_signed_url, sign_header, PreSignedPolicyURLInput, PreSignedPolicyURLOutput, PreSignedPostSignatureInput, PreSignedPostSignatureOutput, PreSignedURLInput, PreSignedURLOutput, SignerAPI};
+use crate::auth::{pre_signed_policy_url, pre_signed_post_signature, pre_signed_url, sign_header, PreSignedPolicyURLInput, PreSignedPolicyURLOutput, PreSignedPostSignatureInput, PreSignedPostSignatureOutput, PreSignedURLInput, PreSignedURLOutput};
 use crate::bucket::{CreateBucketInput, CreateBucketOutput, DeleteBucketCORSInput, DeleteBucketCORSOutput, DeleteBucketCustomDomainInput, DeleteBucketCustomDomainOutput, DeleteBucketEncryptionInput, DeleteBucketEncryptionOutput, DeleteBucketInput, DeleteBucketInventoryInput, DeleteBucketInventoryOutput, DeleteBucketLifecycleInput, DeleteBucketLifecycleOutput, DeleteBucketMirrorBackInput, DeleteBucketMirrorBackOutput, DeleteBucketOutput, DeleteBucketPolicyInput, DeleteBucketPolicyOutput, DeleteBucketRealTimeLogInput, DeleteBucketRealTimeLogOutput, DeleteBucketRenameInput, DeleteBucketRenameOutput, DeleteBucketReplicationInput, DeleteBucketReplicationOutput, DeleteBucketTaggingInput, DeleteBucketTaggingOutput, DeleteBucketWebsiteInput, DeleteBucketWebsiteOutput, DoesBucketExistInput, GetBucketACLInput, GetBucketACLOutput, GetBucketAccessMonitorInput, GetBucketAccessMonitorOutput, GetBucketCORSInput, GetBucketCORSOutput, GetBucketEncryptionInput, GetBucketEncryptionOutput, GetBucketInfoInput, GetBucketInfoOutput, GetBucketInventoryInput, GetBucketInventoryOutput, GetBucketLifecycleInput, GetBucketLifecycleOutput, GetBucketLocationInput, GetBucketLocationOutput, GetBucketMirrorBackInput, GetBucketMirrorBackOutput, GetBucketNotificationType2Input, GetBucketNotificationType2Output, GetBucketPolicyInput, GetBucketPolicyOutput, GetBucketRealTimeLogInput, GetBucketRealTimeLogOutput, GetBucketRenameInput, GetBucketRenameOutput, GetBucketReplicationInput, GetBucketReplicationOutput, GetBucketTaggingInput, GetBucketTaggingOutput, GetBucketTrashInput, GetBucketTrashOutput, GetBucketTypeInput, GetBucketTypeOutput, GetBucketVersioningInput, GetBucketVersioningOutput, GetBucketWebsiteInput, GetBucketWebsiteOutput, HeadBucketInput, HeadBucketOutput, ListBucketCustomDomainInput, ListBucketCustomDomainOutput, ListBucketInventoryInput, ListBucketInventoryOutput, ListBucketsInput, ListBucketsOutput, PutBucketACLInput, PutBucketACLOutput, PutBucketAccessMonitorInput, PutBucketAccessMonitorOutput, PutBucketCORSInput, PutBucketCORSOutput, PutBucketCustomDomainInput, PutBucketCustomDomainOutput, PutBucketEncryptionInput, PutBucketEncryptionOutput, PutBucketInventoryInput, PutBucketInventoryOutput, PutBucketLifecycleInput, PutBucketLifecycleOutput, PutBucketMirrorBackInput, PutBucketMirrorBackOutput, PutBucketNotificationType2Input, PutBucketNotificationType2Output, PutBucketPolicyInput, PutBucketPolicyOutput, PutBucketRealTimeLogInput, PutBucketRealTimeLogOutput, PutBucketRenameInput, PutBucketRenameOutput, PutBucketReplicationInput, PutBucketReplicationOutput, PutBucketStorageClassInput, PutBucketStorageClassOutput, PutBucketTaggingInput, PutBucketTaggingOutput, PutBucketTrashInput, PutBucketTrashOutput, PutBucketVersioningInput, PutBucketVersioningOutput, PutBucketWebsiteInput, PutBucketWebsiteOutput};
 use crate::common::{GenericInput, RequestInfoTrait};
 use crate::config::ConfigHolder;
 use crate::constant::{ALL_UPLOAD_OPERATIONS, BASE_DELAY_MS, CREDENTIALS_EXPIRES, DEFAULT_MAX_KEYS, GET_OBJECT_TO_FILE_OPERATION, HEADER_CONTENT_LENGTH, HEADER_CONTENT_LENGTH_LOWER, HEADER_EXPECT, HEADER_SDK_RETRY_COUNT, MAX_DELAY_MS, SCHEMA_HTTP, SCHEMA_HTTPS};
 use crate::control::{DeleteQosPolicyInput, DeleteQosPolicyOutput, GetQosPolicyInput, GetQosPolicyOutput, PutQosPolicyInput, PutQosPolicyOutput};
-use crate::credential::{CommonCredentials, CommonCredentialsProvider, Credentials, CredentialsProvider, EnvCredentialsProvider, StaticCredentialsProvider};
+use crate::credential::{CommonCredentials, CommonCredentialsProvider, Credentials, EnvCredentialsProvider, StaticCredentialsProvider};
 use crate::enumeration::BucketType;
 use crate::error::{GenericError, TosError};
 use crate::http::{HttpRequest, RequestContext};
 use crate::internal::{auto_recognize_content_type, build_certificate, build_identity, check_bucket_and_key, check_need_retry, exceed_high_latency_log_threshold, get_request_url, AdditionalContext, InputTranslator, MockAsyncInputTranslator};
 use crate::multipart::{AbortMultipartUploadInput, AbortMultipartUploadOutput, CompleteMultipartUploadInput, CompleteMultipartUploadOutput, CreateMultipartUploadInput, CreateMultipartUploadOutput, ListMultipartUploadsInput, ListMultipartUploadsOutput, ListPartsInput, ListPartsOutput, UploadPartCopyInput, UploadPartCopyOutput, UploadPartFromBufferInput, UploadPartInput, UploadPartOutput};
 use crate::object::{AppendObjectBasicInput, AppendObjectFromBufferInput, AppendObjectInput, AppendObjectOutput, CopyObjectInput, CopyObjectOutput, DeleteMultiObjectsInput, DeleteMultiObjectsOutput, DeleteObjectInput, DeleteObjectOutput, DeleteObjectTaggingInput, DeleteObjectTaggingOutput, DoesObjectExistInput, FetchObjectInput, FetchObjectOutput, GetFetchTaskInput, GetFetchTaskOutput, GetFileStatusInput, GetFileStatusOutput, GetObjectACLInput, GetObjectACLOutput, GetObjectInput, GetObjectOutput, GetObjectTaggingInput, GetObjectTaggingOutput, GetSymlinkInput, GetSymlinkOutput, HeadObjectInput, HeadObjectOutput, ListObjectVersionsInput, ListObjectVersionsOutput, ListObjectsType2Input, ListObjectsType2Output, ModifyObjectFromBufferInput, ModifyObjectInput, ModifyObjectOutput, PutFetchTaskInput, PutFetchTaskOutput, PutObjectACLInput, PutObjectACLOutput, PutObjectBasicInput, PutObjectFromBufferInput, PutObjectInput, PutObjectOutput, PutObjectTaggingInput, PutObjectTaggingOutput, PutSymlinkInput, PutSymlinkOutput, RenameObjectInput, RenameObjectOutput, RestoreObjectInput, RestoreObjectOutput, SetObjectMetaInput, SetObjectMetaOutput, SetObjectTimeInput, SetObjectTimeOutput};
-use crate::reader::{InternalReader, MultifunctionalReader};
+use crate::reader::{InternalReader, MultiBytes, MultifunctionalReader};
 use crate::tos::ConfigAware;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -86,7 +88,7 @@ pub struct TosClientBuilder<P, C, S>
 impl<P, C, S> TosClientBuilder<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Send + Sync + 'static,
+    C: Credentials + Clone + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
     pub fn build(mut self) -> Result<TosClientImpl<P, C, S>, TosError> {
@@ -173,6 +175,7 @@ where
         }
 
         let async_runtime = Arc::new(self.async_runtime);
+        let closed = Arc::new(AtomicI8::new(0));
 
         #[cfg(feature = "tokio-runtime")]
         if self.config_holder.dns_cache_time > 0 {
@@ -184,7 +187,8 @@ where
             } else {
                 port = 80;
             }
-            client = client.dns_resolver(Arc::new(crate::asynchronous::dns::InternalDnsResolver::new(self.config_holder.dns_cache_time, port)));
+            client = client.dns_resolver(Arc::new(crate::asynchronous::dns::InternalDnsResolver::new(self.config_holder.dns_cache_time,
+                                                                                                     port, async_runtime.clone(), closed.clone())));
         }
 
         let cp;
@@ -222,7 +226,7 @@ where
                         credentials_can_refresh,
                         async_runtime,
                         c: self.c,
-                        closed: Arc::new(AtomicI8::new(0)),
+                        closed,
                     })
                 }
 
@@ -235,7 +239,7 @@ where
                         credentials_can_refresh,
                         async_runtime,
                         c: self.c,
-                        closed: Arc::new(AtomicI8::new(0)),
+                        closed,
                         inner_credentials: Arc::new(tokio::sync::RwLock::new(None)),
                         cached_buckets: tokio::sync::RwLock::new(HashMap::new()),
                     };
@@ -443,7 +447,7 @@ pub fn env_credentials_provider() -> EnvCredentialsProvider<CommonCredentials> {
 }
 
 pub struct BufferStream {
-    inner: Option<Vec<u8>>,
+    inner: Option<Bytes>,
 }
 
 impl Stream for BufferStream {
@@ -453,7 +457,7 @@ impl Stream for BufferStream {
         if self.inner.is_none() {
             return Poll::Ready(None);
         }
-        Poll::Ready(Some(Ok(Bytes::from(self.inner.take().unwrap()))))
+        Poll::Ready(Some(Ok(self.inner.take().unwrap())))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -465,11 +469,11 @@ impl Stream for BufferStream {
 }
 
 pub fn new_stream(data: impl AsRef<[u8]>) -> BufferStream {
-    BufferStream { inner: Some(data.as_ref().to_owned()) }
+    BufferStream { inner: Some(Bytes::from(data.as_ref().to_owned())) }
 }
 
 pub fn new_stream_nocopy(data: impl Into<Vec<u8>>) -> BufferStream {
-    BufferStream { inner: Some(data.into()) }
+    BufferStream { inner: Some(Bytes::from(data.into())) }
 }
 
 #[async_trait]
@@ -492,7 +496,7 @@ pub struct TosClientImpl<P, C, S> {
     pub(crate) closed: Arc<AtomicI8>,
 
     #[cfg(feature = "tokio-runtime")]
-    pub(crate) inner_credentials: Arc<tokio::sync::RwLock<Option<CommonCredentials>>>,
+    pub(crate) inner_credentials: Arc<tokio::sync::RwLock<Option<C>>>,
     #[cfg(feature = "tokio-runtime")]
     pub(crate) cached_buckets: tokio::sync::RwLock<HashMap<String, BucketCache>>,
 }
@@ -508,7 +512,7 @@ impl<P, C, S> ConfigAware for TosClientImpl<P, C, S> {
 impl<P, C, S> ObjectAPI for TosClientImpl<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Send + Sync + 'static,
+    C: Credentials + Clone + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
     async fn put_object<B>(&self, input: &PutObjectInput<B>) -> Result<PutObjectOutput, TosError>
@@ -519,7 +523,7 @@ where
     }
 
     async fn put_object_from_buffer(&self, input: &PutObjectFromBufferInput) -> Result<PutObjectOutput, TosError> {
-        self.do_request::<_, _, InternalReader<StreamVec>>(input).await
+        self.do_request::<_, _, InternalReader<MultiBytes>>(input).await
     }
 
     #[cfg(feature = "tokio-runtime")]
@@ -684,7 +688,9 @@ where
                         minput.set_async_data_transfer_listener(adts.clone());
                     }
                     if let Some(b) = input.content() {
-                        minput.set_content(b);
+                        for item in b {
+                            minput.append_content_nocopy(item.to_vec());
+                        }
                     }
                     let output = self.put_object_from_buffer(&minput).await?;
                     return Ok(AppendObjectOutput {
@@ -709,7 +715,9 @@ where
                     minput.set_async_data_transfer_listener(adts.clone());
                 }
                 if let Some(b) = input.content() {
-                    minput.set_content(b);
+                    for item in b {
+                        minput.append_content_nocopy(item.to_vec());
+                    }
                 }
                 let output = self.modify_object_from_buffer(&minput).await?;
                 return Ok(AppendObjectOutput {
@@ -719,7 +727,7 @@ where
                 });
             }
         }
-        self.do_request::<_, _, InternalReader<StreamVec>>(input).await
+        self.do_request::<_, _, InternalReader<MultiBytes>>(input).await
     }
 
     async fn fetch_object(&self, input: &FetchObjectInput) -> Result<FetchObjectOutput, TosError> {
@@ -824,7 +832,7 @@ where
 impl<P, C, S> BucketAPI for TosClientImpl<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Send + Sync + 'static,
+    C: Credentials + Clone + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
     async fn create_bucket(&self, input: &CreateBucketInput) -> Result<CreateBucketOutput, TosError> {
@@ -1129,7 +1137,7 @@ where
 impl<P, C, S> MultipartAPI for TosClientImpl<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Send + Sync + 'static,
+    C: Credentials + Clone + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
     async fn create_multipart_upload(&self, input: &CreateMultipartUploadInput) -> Result<CreateMultipartUploadOutput, TosError> {
@@ -1144,7 +1152,7 @@ where
     }
 
     async fn upload_part_from_buffer(&self, input: &UploadPartFromBufferInput) -> Result<UploadPartOutput, TosError> {
-        self.do_request::<_, _, InternalReader<StreamVec>>(input).await
+        self.do_request::<_, _, InternalReader<MultiBytes>>(input).await
     }
 
     #[cfg(feature = "tokio-runtime")]
@@ -1173,24 +1181,34 @@ where
     }
 }
 
+#[async_trait]
 impl<P, C, S> SignerAPI for TosClientImpl<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Send + Sync + 'static,
+    C: Credentials + Clone + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
-    fn pre_signed_url(&self, input: &PreSignedURLInput) -> Result<PreSignedURLOutput, TosError> {
-        let (ak, sk, security_token) = self.sync_load_credentials()?;
+    async fn pre_signed_url(&self, input: &PreSignedURLInput) -> Result<PreSignedURLOutput, TosError> {
+        let cred = self.load_credentials().await?;
+        let ak = cred.ak();
+        let sk = cred.sk();
+        let security_token = cred.security_token();
         pre_signed_url(&self.config_holder, &ak, &sk, &security_token, input)
     }
 
-    fn pre_signed_post_signature(&self, input: &PreSignedPostSignatureInput) -> Result<PreSignedPostSignatureOutput, TosError> {
-        let (ak, sk, security_token) = self.sync_load_credentials()?;
+    async fn pre_signed_post_signature(&self, input: &PreSignedPostSignatureInput) -> Result<PreSignedPostSignatureOutput, TosError> {
+        let cred = self.load_credentials().await?;
+        let ak = cred.ak();
+        let sk = cred.sk();
+        let security_token = cred.security_token();
         pre_signed_post_signature(&self.config_holder, &ak, &sk, &security_token, input)
     }
 
-    fn pre_signed_policy_url(&self, input: &PreSignedPolicyURLInput) -> Result<PreSignedPolicyURLOutput, TosError> {
-        let (ak, sk, security_token) = self.sync_load_credentials()?;
+    async fn pre_signed_policy_url(&self, input: &PreSignedPolicyURLInput) -> Result<PreSignedPolicyURLOutput, TosError> {
+        let cred = self.do_load_credentials().await?;
+        let ak = cred.ak();
+        let sk = cred.sk();
+        let security_token = cred.security_token();
         pre_signed_policy_url(&self.config_holder, &ak, &sk, &security_token, input)
     }
 }
@@ -1198,7 +1216,7 @@ where
 #[async_trait]
 impl<P, C, S> ControlAPI for TosClientImpl<P, C, S>
 where
-    C: 'static + Credentials + Send + Sync,
+    C: 'static + Credentials + Clone + Send + Sync,
     P: 'static + CredentialsProvider<C> + Send + Sync,
     S: 'static + AsyncRuntime + Send + Sync,
 {
@@ -1219,7 +1237,7 @@ where
 impl<P, C, S> TosClient for TosClientImpl<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Send + Sync + 'static,
+    C: Credentials + Clone + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
     fn refresh_credentials(&self, ak: impl Into<String>, sk: impl Into<String>, security_token: impl Into<String>) -> bool {
@@ -1287,25 +1305,25 @@ where
 impl<P, C, S> TosClientImpl<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Send + Sync + 'static,
+    C: Credentials + Clone + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
-    async fn load_credentials(&self) -> Result<(String, String, String), TosError> {
+    async fn load_credentials(&self) -> Result<C, TosError> {
         #[cfg(feature = "tokio-runtime")]
         {
             let inner_credentials = self.inner_credentials.read().await;
             if let Some(c) = inner_credentials.as_ref() {
-                return Ok((c.ak().to_string(), c.sk().to_string(), c.security_token().to_string()));
+                return Ok(c.clone());
             }
         }
-        self.sync_load_credentials()
+        self.do_load_credentials().await
     }
 
-    fn sync_load_credentials(&self) -> Result<(String, String, String), TosError> {
-        let cred = self.credentials_provider.load();
-        match cred.credentials(CREDENTIALS_EXPIRES) {
+    async fn do_load_credentials(&self) -> Result<C, TosError> {
+        let credential_provider = self.credentials_provider.load();
+        match credential_provider.credentials(CREDENTIALS_EXPIRES).await {
             Err(ex) => Err(TosError::client_error_with_cause("load credentials error", GenericError::DefaultError(ex.to_string()))),
-            Ok(c) => Ok((c.ak().to_string(), c.sk().to_string(), c.security_token().to_string())),
+            Ok(c) => Ok(c.clone()),
         }
     }
 
@@ -1321,15 +1339,11 @@ where
                     return;
                 }
                 async_runtime.sleep(Duration::from_secs(crate::constant::CREDENTIALS_REFRESH_INTERVAL)).await;
-                match credential_provider.credentials(CREDENTIALS_EXPIRES) {
+                match credential_provider.credentials(CREDENTIALS_EXPIRES).await {
                     Err(ex) => warn!("async load credentials error, {}", ex),
                     Ok(c) => {
                         let mut inner_credentials = inner_credentials.write().await;
-                        *inner_credentials = Some(CommonCredentials {
-                            ak: c.ak().to_string(),
-                            sk: c.sk().to_string(),
-                            security_token: c.security_token().to_string(),
-                        });
+                        *inner_credentials = Some(c.clone());
                     }
                 }
             }
@@ -1345,7 +1359,7 @@ where
     }
 
     async fn modify_object_from_buffer(&self, input: &ModifyObjectFromBufferInput) -> Result<ModifyObjectOutput, TosError> {
-        self.do_request::<_, _, InternalReader<StreamVec>>(input).await
+        self.do_request::<_, _, InternalReader<MultiBytes>>(input).await
     }
 
     async fn do_request<T, K, B>(&self, input: &T) -> Result<K, TosError>
@@ -1497,9 +1511,12 @@ where
             return Err(TosError::client_error("request control operation but control endpoint is empty"));
         }
 
-        let (ak, sk, security_token) = self.load_credentials().await?;
+        let cred = self.load_credentials().await?;
+        let ak = cred.ak();
+        let sk = cred.sk();
+        let security_token = cred.security_token();
         auto_recognize_content_type(request, config_holder.auto_recognize_content_type);
-        sign_header(request, &ak, &sk, &security_token, config_holder.as_ref(), ac)?;
+        sign_header(request, ak, sk, security_token, config_holder.as_ref(), ac)?;
         request.enable_crc = config_holder.enable_crc;
 
         let request_url = get_request_url(request, config_holder.as_ref(), ac.is_control_operation);
@@ -1569,7 +1586,6 @@ where
         } else if cl == -1 {
             rb = rb.header(HEADER_CONTENT_LENGTH, 0);
         }
-
 
         match rb.build() {
             Ok(req) => {

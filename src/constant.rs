@@ -852,3 +852,4 @@ pub(crate) const ISO8601_DATE_FORMAT_TRUNCATED: &str = "%Y-%m-%d";
 pub(crate) const UNDEFINED: &str = "undefined";
 pub(crate) const CREDENTIALS_EXPIRES: i64 = 3600 * 10;
 pub(crate) const CREDENTIALS_REFRESH_INTERVAL: u64 = 600;
+pub(crate) const DNS_CACHE_REFRESH_INTERVAL: u64 = 30;

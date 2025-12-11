@@ -16,6 +16,7 @@
 use serde::de::StdError;
 use std::env;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 pub trait Credentials: Sized {
     fn ak(&self) -> &str;
@@ -56,32 +57,26 @@ where
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CommonCredentials {
-    pub(crate) ak: String,
-    pub(crate) sk: String,
-    pub(crate) security_token: String,
+    inner: Arc<(String, String, String)>,
 }
 
 impl Credentials for CommonCredentials {
     fn ak(&self) -> &str {
-        &self.ak
+        &self.inner.0
     }
 
     fn sk(&self) -> &str {
-        &self.sk
+        &self.inner.1
     }
 
     fn security_token(&self) -> &str {
-        &self.security_token
+        &self.inner.2
     }
-
     fn new(ak: impl Into<String>, sk: impl Into<String>, security_token: impl Into<String>) -> Result<Self, Box<dyn StdError + Send + Sync>> {
         Ok(CommonCredentials {
-            ak: ak.into(),
-            sk: sk.into(),
-            security_token: security_token.into(),
+            inner: Arc::new((ak.into(), sk.into(), security_token.into()))
         })
     }
 }

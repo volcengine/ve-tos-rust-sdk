@@ -20,6 +20,7 @@ use crate::http::HttpRequest;
 use crate::internal::combine_crc64;
 use bytes::Bytes;
 use crc64fast::Digest;
+use std::collections::LinkedList;
 use std::fs::File;
 use std::future::Future;
 use std::io::{Cursor, Error, ErrorKind, Read, Seek, SeekFrom};
@@ -89,15 +90,106 @@ impl BuildFileReader for InternalReader<File> {
     }
 }
 
+
 pub(crate) trait BuildBufferReader: Sized {
-    fn new(input: Vec<u8>) -> Result<(Self, usize), TosError>;
+    fn new(input: Bytes) -> Result<(Self, usize), TosError>;
 }
 
-impl BuildBufferReader for InternalReader<Cursor<Vec<u8>>> {
-    fn new(input: Vec<u8>) -> Result<(Self, usize), TosError> {
+impl BuildBufferReader for InternalReader<Cursor<Bytes>> {
+    fn new(input: Bytes) -> Result<(Self, usize), TosError> {
         let len = input.len();
         Ok(
             (Self::sized(Cursor::new(input), len), len)
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct MultiBytes {
+    pub(crate) inner: LinkedList<Bytes>,
+    pub(crate) size: usize,
+    pub(crate) current: Option<BytesReader>,
+}
+
+
+impl MultiBytes {
+    pub(crate) fn new(data: LinkedList<Bytes>, size: usize) -> Self {
+        Self {
+            inner: data,
+            size,
+            current: None,
+        }
+    }
+
+    pub(crate) fn push(&mut self, item: Bytes) {
+        self.size += item.len();
+        self.inner.push_back(item);
+    }
+}
+#[derive(Debug, Clone, PartialEq, Default)]
+struct BytesReader {
+    inner: Cursor<Bytes>,
+    size: usize,
+    readed: usize,
+}
+
+impl BytesReader {
+    fn new(data: Bytes) -> Self {
+        let size = data.len();
+        Self {
+            inner: Cursor::new(data),
+            size,
+            readed: 0,
+        }
+    }
+
+    fn can_read(&self) -> bool {
+        self.readed < self.size
+    }
+
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let readed = self.inner.read(buf)?;
+        if readed > 0 {
+            self.readed += readed;
+        }
+        Ok(readed)
+    }
+}
+
+impl Read for MultiBytes {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        loop {
+            if let Some(current) = &mut self.current {
+                if current.can_read() {
+                    let a = current.read(buf)?;
+                    if a > 0 {
+                        return Ok(a);
+                    }
+                }
+            }
+
+            if self.inner.is_empty() {
+                return Ok(0);
+            }
+
+            self.current = Some(BytesReader::new(self.inner.pop_front().unwrap()));
+        }
+    }
+}
+
+pub(crate) trait BuildMultiBufferReader: Sized {
+    fn new(input: MultiBytes) -> Result<(Self, usize), TosError>;
+}
+
+impl BuildMultiBufferReader for InternalReader<MultiBytes> {
+    fn new(input: MultiBytes) -> Result<(Self, usize), TosError> {
+        let len = input.size;
+        Ok(
+            (Self::sized(input, len), len)
         )
     }
 }

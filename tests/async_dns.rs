@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 use crate::common::asynchronous::{create_async_context, AsyncContext, TokioRuntime};
+use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use scopeguard::defer;
 use serde::de::StdError;
@@ -23,10 +24,11 @@ use std::error::Error;
 use std::ops::Add;
 use tokio::runtime;
 use ve_tos_rust_sdk::asynchronous::bucket::BucketAPI;
+use ve_tos_rust_sdk::asynchronous::credential::CredentialsProvider;
 use ve_tos_rust_sdk::asynchronous::tos;
 use ve_tos_rust_sdk::bucket::{DeleteBucketTaggingInput, GetBucketLocationInput, GetBucketTaggingInput, GetBucketTypeInput, ListBucketsInput, PutBucketTaggingInput};
 use ve_tos_rust_sdk::common::{Tag, TagSet};
-use ve_tos_rust_sdk::credential::{CommonCredentials, Credentials, CredentialsProvider, EnvCredentialsProvider, StaticCredentialsProvider};
+use ve_tos_rust_sdk::credential::{CommonCredentials, Credentials, EnvCredentialsProvider, StaticCredentialsProvider};
 use ve_tos_rust_sdk::enumeration::StorageClassType;
 
 mod common;
@@ -57,7 +59,7 @@ fn test_main() {
     })
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct CustomizeCredentials {
     ak: String,
     sk: String,
@@ -77,7 +79,7 @@ impl Credentials for CustomizeCredentials {
     }
 
     fn new(ak: impl Into<String>, sk: impl Into<String>, security_token: impl Into<String>) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        todo!()
+        todo!("no need to impl")
     }
 }
 
@@ -86,16 +88,17 @@ struct CustomizeCredentialProvider<C> {
     cred: C,
 }
 
+#[async_trait]
 impl<C> CredentialsProvider<C> for CustomizeCredentialProvider<C>
 where
-    C: Credentials,
+    C: Credentials + Sync,
 {
-    fn credentials(&self, expires: i64) -> Result<&C, Box<dyn StdError + Send + Sync>> {
+    async fn credentials(&self, expires: i64) -> Result<&C, Box<dyn StdError + Send + Sync>> {
         Ok(&self.cred)
     }
 
     fn new(c: C) -> Result<Self, Box<dyn StdError + Send + Sync>> {
-        todo!()
+        todo!("no need to impl")
     }
 }
 

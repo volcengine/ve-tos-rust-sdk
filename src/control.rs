@@ -21,6 +21,7 @@ use crate::error::TosError;
 use crate::http::HttpRequest;
 use crate::internal::{base64_md5, InputDescriptor, InputTranslator};
 use crate::reader::BuildBufferReader;
+use bytes::Bytes;
 use std::sync::Arc;
 use ve_tos_generic::{GenericInput, RequestInfo};
 
@@ -87,7 +88,7 @@ where
         request.method = HttpMethodPut;
         request.header.insert(HEADER_CONTENT_MD5, base64_md5(&self.policy));
         request.header.insert(HEADER_ACCOUNT_ID, self.account_id.to_string());
-        let (body, len) = B::new(self.policy.clone().into_bytes())?;
+        let (body, len) = B::new(Bytes::from(self.policy.clone().into_bytes()))?;
         request.body = Some(body);
         request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
         Ok(request)

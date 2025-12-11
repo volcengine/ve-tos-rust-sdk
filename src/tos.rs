@@ -25,8 +25,9 @@ use crate::enumeration::HttpMethodType::HttpMethodHead;
 use crate::http::{HttpRequest, HttpResponse, RequestContext};
 use crate::multipart::*;
 use crate::object::*;
-use crate::reader::{InternalReader, MultifunctionalReader};
+use crate::reader::{InternalReader, MultiBytes, MultifunctionalReader};
 use arc_swap::ArcSwap;
+use bytes::Bytes;
 use reqwest::blocking::{Body, Client, RequestBuilder};
 use reqwest::{redirect, Proxy};
 use std::collections::HashMap;
@@ -55,7 +56,7 @@ pub struct TosClientBuilder<P, C>
 impl<P, C> TosClientBuilder<P, C>
 where
     P: CredentialsProvider<C> + Debug,
-    C: Credentials + Debug,
+    C: Credentials + Clone + Debug,
 {
     pub fn build(mut self) -> Result<TosClientImpl<P, C>, TosError> {
         self.config_holder.check(self.endpoint, self.region)?;
@@ -356,7 +357,7 @@ pub struct TosClientImpl<P, C> {
 
 impl<P, C> BucketAPI for TosClientImpl<P, C>
 where
-    C: Credentials,
+    C: Credentials + Clone,
     P: CredentialsProvider<C>,
 {
     fn create_bucket(&self, input: &CreateBucketInput) -> Result<CreateBucketOutput, TosError> {
@@ -378,7 +379,7 @@ where
 
 impl<P, C> ObjectAPI for TosClientImpl<P, C>
 where
-    C: Credentials,
+    C: Credentials + Clone,
     P: CredentialsProvider<C>,
 {
     fn copy_object(&self, input: &CopyObjectInput) -> Result<CopyObjectOutput, TosError> {
@@ -390,7 +391,7 @@ where
     }
 
     fn delete_multi_objects(&self, input: &DeleteMultiObjectsInput) -> Result<DeleteMultiObjectsOutput, TosError> {
-        self.do_request::<DeleteMultiObjectsInput, DeleteMultiObjectsOutput, InternalReader<Cursor<Vec<u8>>>>(input)
+        self.do_request::<DeleteMultiObjectsInput, DeleteMultiObjectsOutput, InternalReader<Cursor<Bytes>>>(input)
     }
 
     fn get_object(&self, input: &GetObjectInput) -> Result<GetObjectOutput, TosError> {
@@ -417,7 +418,7 @@ where
     }
 
     fn append_object_from_buffer(&self, input: &AppendObjectFromBufferInput) -> Result<AppendObjectOutput, TosError> {
-        self.do_request::<_, _, InternalReader<Cursor<Vec<u8>>>>(input)
+        self.do_request::<_, _, InternalReader<MultiBytes>>(input)
     }
 
     fn list_objects(&self, input: &ListObjectsInput) -> Result<ListObjectsOutput, TosError> {
@@ -470,7 +471,7 @@ where
     }
 
     fn put_object_from_buffer(&self, input: &PutObjectFromBufferInput) -> Result<PutObjectOutput, TosError> {
-        self.do_request::<_, _, InternalReader<Cursor<Vec<u8>>>>(input)
+        self.do_request::<_, _, InternalReader<MultiBytes>>(input)
     }
 
     fn put_object_from_file(&self, input: &PutObjectFromFileInput) -> Result<PutObjectOutput, TosError> {
@@ -478,7 +479,7 @@ where
     }
 
     fn put_object_acl(&self, input: &PutObjectACLInput) -> Result<PutObjectACLOutput, TosError> {
-        self.do_request::<_, _, InternalReader<Cursor<Vec<u8>>>>(input)
+        self.do_request::<_, _, InternalReader<Cursor<Bytes>>>(input)
     }
 
     fn set_object_meta(&self, input: &SetObjectMetaInput) -> Result<SetObjectMetaOutput, TosError> {
@@ -488,7 +489,7 @@ where
 
 impl<P, C> MultipartAPI for TosClientImpl<P, C>
 where
-    C: Credentials,
+    C: Credentials + Clone,
     P: CredentialsProvider<C>,
 {
     fn create_multipart_upload(&self, input: &CreateMultipartUploadInput) -> Result<CreateMultipartUploadOutput, TosError> {
@@ -503,7 +504,7 @@ where
     }
 
     fn upload_part_from_buffer(&self, input: &UploadPartFromBufferInput) -> Result<UploadPartOutput, TosError> {
-        self.do_request::<_, _, InternalReader<Cursor<Vec<u8>>>>(input)
+        self.do_request::<_, _, InternalReader<MultiBytes>>(input)
     }
 
     fn upload_part_from_file(&self, input: &UploadPartFromFileInput) -> Result<UploadPartOutput, TosError> {
@@ -511,7 +512,7 @@ where
     }
 
     fn complete_multipart_upload(&self, input: &CompleteMultipartUploadInput) -> Result<CompleteMultipartUploadOutput, TosError> {
-        self.do_request::<_, _, InternalReader<Cursor<Vec<u8>>>>(input)
+        self.do_request::<_, _, InternalReader<Cursor<Bytes>>>(input)
     }
 
     fn abort_multipart_upload(&self, input: &AbortMultipartUploadInput) -> Result<AbortMultipartUploadOutput, TosError> {
@@ -540,29 +541,38 @@ impl<P, C> ConfigAware for TosClientImpl<P, C>
 
 impl<P, C> SignerAPI for TosClientImpl<P, C>
 where
-    C: Credentials + Debug,
+    C: Credentials + Clone + Debug,
     P: CredentialsProvider<C> + Debug,
 {
     fn pre_signed_url(&self, input: &PreSignedURLInput) -> Result<PreSignedURLOutput, TosError> {
-        let (ak, sk, security_token) = self.load_credentials()?;
-        pre_signed_url(&self.config_holder, &ak, &sk, &security_token, input)
+        let cred = self.load_credentials()?;
+        let ak = cred.ak();
+        let sk = cred.sk();
+        let security_token = cred.security_token();
+        pre_signed_url(&self.config_holder, ak, sk, security_token, input)
     }
 
     fn pre_signed_post_signature(&self, input: &PreSignedPostSignatureInput) -> Result<PreSignedPostSignatureOutput, TosError> {
-        let (ak, sk, security_token) = self.load_credentials()?;
-        pre_signed_post_signature(&self.config_holder, &ak, &sk, &security_token, input)
+        let cred = self.load_credentials()?;
+        let ak = cred.ak();
+        let sk = cred.sk();
+        let security_token = cred.security_token();
+        pre_signed_post_signature(&self.config_holder, ak, sk, security_token, input)
     }
 
     fn pre_signed_policy_url(&self, input: &PreSignedPolicyURLInput) -> Result<PreSignedPolicyURLOutput, TosError> {
-        let (ak, sk, security_token) = self.load_credentials()?;
-        pre_signed_policy_url(&self.config_holder, &ak, &sk, &security_token, input)
+        let cred = self.load_credentials()?;
+        let ak = cred.ak();
+        let sk = cred.sk();
+        let security_token = cred.security_token();
+        pre_signed_policy_url(&self.config_holder, ak, sk, security_token, input)
     }
 }
 
 impl<P, C> TosClient for TosClientImpl<P, C>
 where
     P: CredentialsProvider<C> + Debug,
-    C: Credentials + Debug,
+    C: Credentials + Clone + Debug,
 {
     fn refresh_credentials(&self, ak: impl Into<String>, sk: impl Into<String>, security_token: impl Into<String>) -> bool {
         if !self.credentials_can_refresh {
@@ -630,13 +640,13 @@ where
 impl<P, C> TosClientImpl<P, C>
 where
     P: CredentialsProvider<C>,
-    C: Credentials,
+    C: Credentials + Clone,
 {
-    fn load_credentials(&self) -> Result<(String, String, String), TosError> {
-        let cred = self.credentials_provider.load();
-        match cred.credentials(CREDENTIALS_EXPIRES) {
+    fn load_credentials(&self) -> Result<C, TosError> {
+        let credential_provider = self.credentials_provider.load();
+        match credential_provider.credentials(CREDENTIALS_EXPIRES) {
             Err(ex) => Err(TosError::client_error_with_cause("load credentials error", GenericError::DefaultError(ex.to_string()))),
-            Ok(c) => Ok((c.ak().to_string(), c.sk().to_string(), c.security_token().to_string())),
+            Ok(c) => Ok(c.clone()),
         }
     }
 
@@ -740,10 +750,13 @@ where
         B: Read + Send + 'static,
         'a: 'c,
     {
-        let (ak, sk, security_token) = self.load_credentials()?;
+        let cred = self.load_credentials()?;
+        let ak = cred.ak();
+        let sk = cred.sk();
+        let security_token = cred.security_token();
         let config_holder = self.config_holder.load();
         auto_recognize_content_type(request, config_holder.auto_recognize_content_type);
-        sign_header(request, &ak, &sk, &security_token, config_holder.as_ref(), ac)?;
+        sign_header(request, ak, sk, security_token, config_holder.as_ref(), ac)?;
         request.enable_crc = config_holder.enable_crc;
         let request_url = get_request_url(request, config_holder.as_ref(), false);
         ac.request_url = Some(request_url.clone());

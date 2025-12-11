@@ -13,19 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod tos;
-pub mod object;
-pub mod bucket;
-pub mod multipart;
-pub mod paginator;
-pub mod common;
-pub mod control;
-pub mod credential;
-pub mod auth;
-mod reader;
-mod http;
-mod internal;
-#[cfg(feature = "tokio-runtime")]
-mod file;
-#[cfg(feature = "tokio-runtime")]
-mod dns;
+use crate::auth::{PreSignedPolicyURLInput, PreSignedPolicyURLOutput, PreSignedPostSignatureInput, PreSignedPostSignatureOutput, PreSignedURLInput, PreSignedURLOutput};
+use crate::error::TosError;
+use async_trait::async_trait;
+
+#[async_trait]
+pub trait SignerAPI {
+    async fn pre_signed_url(&self, input: &PreSignedURLInput) -> Result<PreSignedURLOutput, TosError>;
+    async fn pre_signed_post_signature(&self, input: &PreSignedPostSignatureInput) -> Result<PreSignedPostSignatureOutput, TosError>;
+    async fn pre_signed_policy_url(&self, input: &PreSignedPolicyURLInput) -> Result<PreSignedPolicyURLOutput, TosError>;
+}

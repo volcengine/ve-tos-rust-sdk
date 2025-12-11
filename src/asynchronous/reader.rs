@@ -15,7 +15,7 @@
  */
 use crate::common::DataTransferType;
 use crate::error::TosError;
-use crate::reader::{BuildBufferReader, InternalReader, MultifunctionalReader};
+use crate::reader::{BuildBufferReader, InternalReader, MultiBytes, MultifunctionalReader};
 use bytes::Bytes;
 use futures_core::Stream;
 use futures_util::StreamExt;
@@ -140,7 +140,7 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub(crate) struct StreamVec(Option<Vec<u8>>);
+pub(crate) struct StreamVec(Option<Bytes>);
 
 impl Stream for StreamVec {
     type Item = reqwest::Result<Bytes>;
@@ -149,8 +149,7 @@ impl Stream for StreamVec {
         if self.0.is_none() {
             return Poll::Ready(None);
         }
-
-        Poll::Ready(Some(Ok(Bytes::from(self.0.take().unwrap()))))
+        Poll::Ready(Some(Ok(self.0.take().unwrap())))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -162,13 +161,32 @@ impl Stream for StreamVec {
 }
 
 impl BuildBufferReader for InternalReader<StreamVec> {
-    fn new(input: Vec<u8>) -> Result<(Self, usize), TosError> {
+    fn new(input: Bytes) -> Result<(Self, usize), TosError> {
         let len = input.len();
         Ok(
             (Self::sized(StreamVec(Some(input)), len), len)
         )
     }
 }
+
+impl Stream for MultiBytes {
+    type Item = reqwest::Result<Bytes>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.inner.is_empty() {
+            return Poll::Ready(None);
+        }
+        Poll::Ready(Some(Ok(self.inner.pop_front().unwrap())))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.inner.is_empty() {
+            return (0, None);
+        }
+        (0, Some(self.size))
+    }
+}
+
 
 impl<B> Stream for MultifunctionalReader<B>
 where

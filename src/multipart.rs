@@ -13,11 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::cell::{Ref, RefCell};
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, LinkedList};
 use std::io::Read;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
@@ -31,7 +32,7 @@ use crate::enumeration::{ACLType, StorageClassType};
 use crate::error::{ErrorResponse, GenericError, TosError};
 use crate::http::{HttpRequest, HttpResponse, RequestContext};
 use crate::internal::{get_header_value, get_header_value_from_str, get_map_value_from_str, get_map_value_str, map_insert, parse_date_time_iso8601, parse_json, parse_json_by_buf, parse_response_string_by_buf, read_response, set_acl_header, set_callback_header, set_copy_source_header, set_copy_source_if_condition_header, set_copy_source_ssec_header, set_http_basic_header, set_list_common_query, set_misc_header, set_multipart_upload_query, set_sse_header, set_ssec_header, set_upload_id, trans_meta, InputDescriptor, InputTranslator, OutputParser};
-use crate::reader::{BuildBufferReader, BuildFileReader};
+use crate::reader::{BuildBufferReader, BuildFileReader, BuildMultiBufferReader, MultiBytes};
 
 pub trait MultipartAPI {
     fn create_multipart_upload(&self, input: &CreateMultipartUploadInput) -> Result<CreateMultipartUploadOutput, TosError>;
@@ -369,6 +370,7 @@ pub struct UploadPartInput<B>
 }
 
 unsafe impl<B> Sync for UploadPartInput<B> {}
+unsafe impl<B> Send for UploadPartInput<B> {}
 
 impl<B> InputDescriptor for UploadPartInput<B>
 {
@@ -565,7 +567,7 @@ impl UploadPartOutput {
 #[use_inner]
 pub struct UploadPartFromBufferInput {
     pub(crate) inner: UploadPartBasicInput,
-    pub(crate) content: Option<Vec<u8>>,
+    pub(crate) content: Option<MultiBytes>,
     pub(crate) content_length: i64,
 }
 
@@ -584,7 +586,7 @@ impl InputDescriptor for UploadPartFromBufferInput {
 
 impl<B> InputTranslator<B> for UploadPartFromBufferInput
 where
-    B: BuildBufferReader,
+    B: BuildMultiBufferReader,
 {
     fn trans(&self, config_holder: Arc<ConfigHolder>) -> Result<HttpRequest<B>, TosError> {
         let mut request = self.inner.trans(config_holder)?;
@@ -593,7 +595,7 @@ where
             request.header.insert(HEADER_CONTENT_LENGTH, self.content_length.to_string());
         }
         if let Some(content) = &self.content {
-            let (body, len) = B::new(content.to_owned())?;
+            let (body, len) = B::new(content.clone())?;
             request.body = Some(body);
             if self.content_length < 0 {
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
@@ -645,8 +647,11 @@ impl UploadPartFromBufferInput {
     pub fn key(&self) -> &str {
         &self.inner.key
     }
-    pub fn content(&self) -> &Option<impl AsRef<[u8]>> {
-        &self.content
+    pub fn content(&self) -> Option<impl Iterator<Item=&Bytes>> {
+        match &self.content {
+            None => None,
+            Some(x) => Some(x.inner.iter()),
+        }
     }
     pub fn content_length(&self) -> i64 {
         self.content_length
@@ -666,11 +671,43 @@ impl UploadPartFromBufferInput {
     pub fn set_key(&mut self, key: impl Into<String>) {
         self.inner.key = key.into();
     }
+    pub fn set_content_with_bytes_list(&mut self, bytes_list: impl Iterator<Item=impl Into<Bytes>>) {
+        let mut list = LinkedList::new();
+        let mut size = 0;
+        for item in bytes_list {
+            let item = item.into();
+            size += item.len();
+            list.push_back(item);
+        }
+        self.content = Some(MultiBytes::new(list, size));
+    }
     pub fn set_content(&mut self, content: impl AsRef<[u8]>) {
-        self.content = Some(content.as_ref().to_owned());
+        let item = content.as_ref().to_owned();
+        let size = item.len();
+        let mut list = LinkedList::new();
+        list.push_back(Bytes::from(item));
+        self.content = Some(MultiBytes::new(list, size));
+    }
+    pub fn append_content(&mut self, content: impl AsRef<[u8]>) {
+        if let Some(contents) = &mut self.content {
+            contents.push(Bytes::from(content.as_ref().to_owned()));
+        } else {
+            self.set_content(content);
+        }
     }
     pub fn set_content_nocopy(&mut self, content: impl Into<Vec<u8>>) {
-        self.content = Some(content.into());
+        let item = content.into();
+        let size = item.len();
+        let mut list = LinkedList::new();
+        list.push_back(Bytes::from(item));
+        self.content = Some(MultiBytes::new(list, size));
+    }
+    pub fn append_content_nocopy(&mut self, content: impl Into<Vec<u8>>) {
+        if let Some(contents) = &mut self.content {
+            contents.push(Bytes::from(content.into()));
+        } else {
+            self.set_content_nocopy(content);
+        }
     }
     pub fn set_content_length(&mut self, content_length: i64) {
         self.content_length = content_length;
@@ -912,7 +949,7 @@ where
             match serde_json::to_string(&TempUploadedParts { parts }) {
                 Err(e) => return Err(TosError::client_error_with_cause("trans json error", GenericError::JsonError(e.to_string()))),
                 Ok(json) => {
-                    let (body, len) = B::new(json.into_bytes())?;
+                    let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                     request.body = Some(body);
                     header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 }

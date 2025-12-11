@@ -18,14 +18,14 @@ use crate::common::gen_random_string;
 use reqwest::{redirect, Body, Client};
 use scopeguard::defer;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use tokio::runtime;
 use tracing::log::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
+use ve_tos_rust_sdk::asynchronous::auth::SignerAPI;
 use ve_tos_rust_sdk::asynchronous::object::ObjectAPI;
 use ve_tos_rust_sdk::asynchronous::tos;
-use ve_tos_rust_sdk::auth::{ContentLengthRange, PolicySignatureCondition, PostSignatureCondition, PostSignatureMultiValuesCondition, PreSignedPolicyURLInput, SignerAPI};
+use ve_tos_rust_sdk::auth::{ContentLengthRange, PolicySignatureCondition, PostSignatureCondition, PostSignatureMultiValuesCondition, PreSignedPolicyURLInput};
 use ve_tos_rust_sdk::auth::{PreSignedPostSignatureInput, PreSignedURLInput};
 use ve_tos_rust_sdk::enumeration::HttpMethodType::{HttpMethodDelete, HttpMethodGet, HttpMethodHead, HttpMethodPut};
 use ve_tos_rust_sdk::object::PutObjectFromBufferInput;
@@ -96,7 +96,7 @@ async fn test_policy_sign(context: &AsyncContext) {
 
     let mut input = PreSignedPolicyURLInput::new(context.fixed_bucket());
     input.set_conditions(vec![PolicySignatureCondition::new_with_operator("key", prefix, "starts-with")]);
-    let o = client.pre_signed_policy_url(&input).unwrap();
+    let o = client.pre_signed_policy_url(&input).await.unwrap();
     println!("{}", o.signed_query());
     println!("{}", o.get_signed_url_for_list(None::<HashMap<&str, &str>>));
     println!("{}", o.get_signed_url_for_get_or_head("key1", None::<HashMap<&str, &str>>));
@@ -148,7 +148,7 @@ async fn test_post_sign(context: &AsyncContext) {
     let cond = PostSignatureMultiValuesCondition::new("acl",
                                                       vec!["public-read".to_string(), "public-read-write".to_string()], "in");
     input.set_multi_values_conditions(Vec::from([cond]));
-    let output = client.pre_signed_post_signature(&input).unwrap();
+    let output = client.pre_signed_post_signature(&input).await.unwrap();
     println!("{}", context.fixed_bucket());
     println!("{}", key);
     println!("{}", output.origin_policy());
@@ -173,7 +173,7 @@ async fn test_pre_sign(context: &AsyncContext) {
     let bucket = context.fixed_bucket();
     let mut input = PreSignedURLInput::new(bucket);
     input.set_http_method(HttpMethodHead);
-    let output = client.pre_signed_url(&input).unwrap();
+    let output = client.pre_signed_url(&input).await.unwrap();
     let signed_url = output.signed_url();
     assert!(signed_url.len() > 0);
 
@@ -187,7 +187,7 @@ async fn test_pre_sign(context: &AsyncContext) {
     input.set_http_method(HttpMethodPut);
     input.set_key(key.clone());
 
-    let output = client.pre_signed_url(&input).unwrap();
+    let output = client.pre_signed_url(&input).await.unwrap();
     let signed_url = output.signed_url();
     assert!(signed_url.len() > 0);
 
@@ -199,7 +199,7 @@ async fn test_pre_sign(context: &AsyncContext) {
     input.set_http_method(HttpMethodGet);
     input.set_key(key.clone());
 
-    let output = client.pre_signed_url(&input).unwrap();
+    let output = client.pre_signed_url(&input).await.unwrap();
     let signed_url = output.signed_url();
     assert!(signed_url.len() > 0);
 
@@ -216,7 +216,7 @@ async fn test_pre_sign(context: &AsyncContext) {
     input.set_http_method(HttpMethodDelete);
     input.set_key(key.clone());
 
-    let output = client.pre_signed_url(&input).unwrap();
+    let output = client.pre_signed_url(&input).await.unwrap();
     let signed_url = output.signed_url();
     assert!(signed_url.len() > 0);
 
@@ -228,7 +228,7 @@ async fn test_pre_sign(context: &AsyncContext) {
     input.set_http_method(HttpMethodHead);
     input.set_key(key.clone());
 
-    let output = client.pre_signed_url(&input).unwrap();
+    let output = client.pre_signed_url(&input).await.unwrap();
     let signed_url = output.signed_url();
     assert!(signed_url.len() > 0);
 

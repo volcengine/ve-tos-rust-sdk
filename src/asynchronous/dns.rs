@@ -13,8 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use crate::asynchronous::tos::AsyncRuntime;
+use crate::constant::DNS_CACHE_REFRESH_INTERVAL;
 use crate::error::TosError;
-use chrono::{DateTime, Duration, Utc};
+use arc_swap::ArcSwap;
+use chrono::{DateTime, Utc};
 use hickory_resolver::lookup_ip::LookupIp;
 use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::{ResolveError, Resolver};
@@ -25,10 +28,20 @@ use serde::de::StdError;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::ops::Add;
+use std::sync::atomic::{AtomicI8, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{RwLock, RwLockWriteGuard};
+use tracing::warn;
 
-pub(crate) type DnsCache = (Vec<SocketAddr>, DateTime<Utc>);
+pub(crate) struct DnsCacheItem {
+    pub(crate) host: String,
+    pub(crate) addrs: Vec<SocketAddr>,
+    pub(crate) ddl: DateTime<Utc>,
+    pub(crate) immortal: bool,
+    pub(crate) last_update_at: DateTime<Utc>,
+}
+pub(crate) type DnsCache = Arc<ArcSwap<DnsCacheItem>>;
 
 pub(crate) struct InternalDnsResolver {
     pub(crate) dns_cache_time: isize,
@@ -38,10 +51,84 @@ pub(crate) struct InternalDnsResolver {
 }
 
 impl InternalDnsResolver {
-    pub(crate) fn new(dns_cache_time: isize, port: isize) -> Self
+    pub(crate) fn new<S>(dns_cache_time: isize, port: isize, async_runtime: Arc<S>, closed: Arc<AtomicI8>) -> Self
+    where
+        S: AsyncRuntime + Send + Sync + 'static,
     {
-        let cached_addrs = Arc::new(RwLock::new(HashMap::new()));
+        let cached_addrs = Arc::new(RwLock::new(HashMap::<String, DnsCache>::new()));
         let resolver = Arc::new(Resolver::builder_tokio().unwrap().build());
+
+        let async_runtime2 = async_runtime.clone();
+        let cached_addrs2 = cached_addrs.clone();
+        let resolver2 = resolver.clone();
+        let _ = async_runtime.spawn(async move {
+            loop {
+                if closed.load(Ordering::Acquire) == 1 {
+                    return;
+                }
+                async_runtime2.sleep(Duration::from_secs(DNS_CACHE_REFRESH_INTERVAL)).await;
+                let mut cached_addrs_values;
+                {
+                    let cached_addrs2 = cached_addrs2.read().await;
+                    cached_addrs_values = Vec::with_capacity(cached_addrs2.len());
+                    for cached_addr in cached_addrs2.values() {
+                        cached_addrs_values.push(cached_addr.clone());
+                    }
+                }
+
+                for cached_addrs_value in cached_addrs_values {
+                    let cached_addrs_value2 = cached_addrs_value.load();
+                    if (Utc::now() - cached_addrs_value2.last_update_at).num_milliseconds() <= 1000 {
+                        continue;
+                    }
+                    match resolver2.lookup_ip(cached_addrs_value2.host.as_str()).await {
+                        Err(ex) => {
+                            warn!("async resolve from {} is failed, {}", cached_addrs_value2.host, ex.to_string());
+                            cached_addrs_value.store(Arc::new(DnsCacheItem {
+                                host: cached_addrs_value2.host.clone(),
+                                addrs: cached_addrs_value2.addrs.clone(),
+                                ddl: cached_addrs_value2.ddl,
+                                immortal: true,
+                                last_update_at: cached_addrs_value2.last_update_at,
+                            }));
+                        }
+                        Ok(ips) => {
+                            let mut addrs = Vec::<SocketAddr>::with_capacity(10);
+                            for ip in ips.iter() {
+                                match ip {
+                                    IpAddr::V4(ipv4) => addrs.push(SocketAddr::V4(SocketAddrV4::new(ipv4, port as u16))),
+                                    IpAddr::V6(ipv6) => addrs.push(SocketAddr::V6(SocketAddrV6::new(ipv6, port as u16, 0, 0)))
+                                }
+                            }
+
+                            if addrs.len() == 0 {
+                                warn!("async resolve from {} is empty", cached_addrs_value2.host);
+                                cached_addrs_value.store(Arc::new(DnsCacheItem {
+                                    host: cached_addrs_value2.host.clone(),
+                                    addrs: cached_addrs_value2.addrs.clone(),
+                                    ddl: cached_addrs_value2.ddl,
+                                    immortal: true,
+                                    last_update_at: cached_addrs_value2.last_update_at,
+                                }));
+                                return;
+                            }
+
+                            let mut rng = thread_rng();
+                            let dns_cache_time = dns_cache_time + rng.gen_range(0..5) as isize;
+                            let now = Utc::now();
+                            cached_addrs_value.store(Arc::new(DnsCacheItem {
+                                host: cached_addrs_value2.host.clone(),
+                                addrs: addrs.clone(),
+                                ddl: now.add(Duration::from_secs((dns_cache_time * 60) as u64)),
+                                immortal: false,
+                                last_update_at: now,
+                            }));
+                        }
+                    }
+                }
+            }
+        });
+
         Self {
             dns_cache_time,
             port,
@@ -62,20 +149,22 @@ impl Resolve for InternalDnsResolver
         Box::pin(async move {
             {
                 let cached_addrs = cached_addrs.read().await;
-                if let Some((addrs, ddl)) = cached_addrs.get(name.as_str()) {
-                    if addrs.len() > 0 && ddl >= &Utc::now() {
+                if let Some(dns_cache) = cached_addrs.get(name.as_str()) {
+                    let dns_cache = dns_cache.load();
+                    if dns_cache.addrs.len() > 0 && (dns_cache.ddl >= Utc::now() || dns_cache.immortal) {
                         // println!("{}", "return cached addr");
-                        let addrs = Box::new(shuffle(addrs.clone())) as Box<dyn Iterator<Item=SocketAddr> + Send>;
+                        let addrs = Box::new(shuffle(dns_cache.addrs.clone())) as Box<dyn Iterator<Item=SocketAddr> + Send>;
                         return Ok(addrs);
                     }
                 }
             }
 
             let cached_addrs = cached_addrs.write().await;
-            if let Some((addrs, ddl)) = cached_addrs.get(name.as_str()) {
-                if addrs.len() > 0 && ddl >= &Utc::now() {
+            if let Some(dns_cache) = cached_addrs.get(name.as_str()) {
+                let dns_cache = dns_cache.load();
+                if dns_cache.addrs.len() > 0 && (dns_cache.ddl >= Utc::now() || dns_cache.immortal) {
                     // println!("{}", "return cached addr");
-                    let addrs = Box::new(shuffle(addrs.clone())) as Box<dyn Iterator<Item=SocketAddr> + Send>;
+                    let addrs = Box::new(shuffle(dns_cache.addrs.clone())) as Box<dyn Iterator<Item=SocketAddr> + Send>;
                     return Ok(addrs);
                 }
             }
@@ -109,9 +198,16 @@ pub(crate) fn trans(result: Result<LookupIp, ResolveError>, port: u16, name: hyp
                 return Err(ex);
             }
 
-            let mut rng = rand::thread_rng();
+            let mut rng = thread_rng();
             let dns_cache_time = dns_cache_time + rng.gen_range(0..5) as isize;
-            cached_addrs.insert(name.to_string(), (addrs.clone(), Utc::now().add(Duration::minutes(dns_cache_time as i64))));
+            let now = Utc::now();
+            cached_addrs.insert(name.to_string(), Arc::new(ArcSwap::new(Arc::new(DnsCacheItem {
+                host: name.to_string(),
+                addrs: addrs.clone(),
+                ddl: now.add(Duration::from_secs((dns_cache_time * 60) as u64)),
+                immortal: false,
+                last_update_at: now,
+            }))));
             Ok(Box::new(addrs.into_iter()) as Box<dyn Iterator<Item=SocketAddr> + Send>)
         }
     }

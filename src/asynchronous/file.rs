@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 use crate::asynchronous::common::DataTransferListener;
+use crate::asynchronous::credential::CredentialsProvider;
 use crate::asynchronous::http::HttpResponse;
 use crate::asynchronous::internal::{AsyncInputTranslator, OutputParser};
 use crate::asynchronous::reader::StreamAdapter;
@@ -21,7 +22,7 @@ use crate::asynchronous::tos::{AsyncRuntime, TosClientImpl};
 use crate::common::{DataTransferStatus, Meta, RequestInfo, RequestInfoTrait};
 use crate::config::ConfigHolder;
 use crate::constant::{HEADER_CONTENT_LENGTH, HEADER_CONTENT_RANGE, HEADER_RANGE, QUERY_PROCESS, UUID_NODE};
-use crate::credential::{Credentials, CredentialsProvider};
+use crate::credential::Credentials;
 use crate::error::{GenericError, TosError};
 use crate::http::HttpRequest;
 use crate::internal::{get_header_value, InputDescriptor, InputTranslator, MockAsyncInputTranslator};
@@ -127,7 +128,7 @@ impl BuildFileStream for FileReader {
 impl<P, C, S> TosClientImpl<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Send + Sync + 'static,
+    C: Credentials + Clone + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
     pub(crate) async fn do_request_af<F, K, B>(&self, input: &F) -> Result<K, TosError>

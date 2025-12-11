@@ -25,14 +25,14 @@ use crate::error::{ErrorResponse, GenericError, TosError};
 use crate::http::{HttpRequest, HttpResponse, RequestContext};
 use crate::internal::{base64_md5, get_header_value_ref, map_insert, parse_json_by_buf, parse_response_string_by_buf, read_response, set_acl_header, set_copy_source_header, set_copy_source_if_condition_header, set_copy_source_ssec_header, set_data_process_query, set_http_basic_header, set_http_basic_header_for_fetch, set_if_match_header, set_misc_header, set_misc_header_for_fetch, set_object_lock_header, set_rewrite_response_query, set_sse_header, trans_meta, url_encode_with_safe};
 use crate::internal::{get_header_value, get_header_value_from_str, get_header_value_str, get_header_value_url_decoded, get_map_value_str, parse_date_time_iso8601, parse_date_time_rfc1123, parse_json, set_callback_header, set_if_condition_header, set_list_common_query, set_ssec_header, InputDescriptor, InputTranslator, OutputParser};
-use crate::reader::{BuildBufferReader, BuildFileReader, MultifunctionalReader};
+use crate::reader::{BuildBufferReader, BuildFileReader, BuildMultiBufferReader, MultiBytes, MultifunctionalReader};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures_core::Stream;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use std::cell::{Ref, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, LinkedList};
 use std::fmt::{Debug, Formatter};
 use std::fs;
 use std::fs::File;
@@ -624,7 +624,7 @@ where
                 let mut request = self.trans_bucket()?;
                 request.method = HttpMethodPost;
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
 
@@ -2121,6 +2121,7 @@ pub struct AppendObjectInput<B>
 }
 
 unsafe impl<B> Sync for AppendObjectInput<B> {}
+unsafe impl<B> Send for AppendObjectInput<B> {}
 
 impl<B> InputDescriptor for AppendObjectInput<B>
 {
@@ -2310,7 +2311,7 @@ impl AppendObjectOutput {
 pub struct AppendObjectFromBufferInput {
     pub(crate) generic_input: GenericInput,
     pub(crate) inner: AppendObjectBasicInput,
-    pub(crate) content: Option<Vec<u8>>,
+    pub(crate) content: Option<MultiBytes>,
 }
 
 impl InputDescriptor for AppendObjectFromBufferInput {
@@ -2327,13 +2328,13 @@ impl InputDescriptor for AppendObjectFromBufferInput {
 
 impl<B> InputTranslator<B> for AppendObjectFromBufferInput
 where
-    B: BuildBufferReader,
+    B: BuildMultiBufferReader,
 {
     fn trans(&self, config_holder: Arc<ConfigHolder>) -> Result<HttpRequest<B>, TosError> {
         let mut request = self.inner.trans(config_holder)?;
         request.operation = self.operation();
         if let Some(content) = &self.content {
-            let (body, len) = B::new(content.to_owned())?;
+            let (body, len) = B::new(content.clone())?;
             request.body = Some(body);
             if self.inner.content_length < 0 {
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
@@ -2391,8 +2392,11 @@ impl AppendObjectFromBufferInput {
     pub fn offset(&self) -> i64 {
         self.inner.offset
     }
-    pub fn content(&self) -> &Option<impl AsRef<[u8]>> {
-        &self.content
+    pub fn content(&self) -> Option<impl Iterator<Item=&Bytes>> {
+        match &self.content {
+            None => None,
+            Some(x) => Some(x.inner.iter()),
+        }
     }
     pub fn meta(&self) -> &HashMap<String, String> {
         &self.inner.meta
@@ -2427,11 +2431,43 @@ impl AppendObjectFromBufferInput {
     pub fn set_offset(&mut self, offset: i64) {
         self.inner.offset = offset;
     }
+    pub fn set_content_with_bytes_list(&mut self, bytes_list: impl Iterator<Item=impl Into<Bytes>>) {
+        let mut list = LinkedList::new();
+        let mut size = 0;
+        for item in bytes_list {
+            let item = item.into();
+            size += item.len();
+            list.push_back(item);
+        }
+        self.content = Some(MultiBytes::new(list, size));
+    }
     pub fn set_content(&mut self, content: impl AsRef<[u8]>) {
-        self.content = Some(content.as_ref().to_owned());
+        let item = content.as_ref().to_owned();
+        let size = item.len();
+        let mut list = LinkedList::new();
+        list.push_back(Bytes::from(item));
+        self.content = Some(MultiBytes::new(list, size));
+    }
+    pub fn append_content(&mut self, content: impl AsRef<[u8]>) {
+        if let Some(contents) = &mut self.content {
+            contents.push(Bytes::from(content.as_ref().to_owned()));
+        } else {
+            self.set_content(content);
+        }
     }
     pub fn set_content_nocopy(&mut self, content: impl Into<Vec<u8>>) {
-        self.content = Some(content.into());
+        let item = content.into();
+        let size = item.len();
+        let mut list = LinkedList::new();
+        list.push_back(Bytes::from(item));
+        self.content = Some(MultiBytes::new(list, size));
+    }
+    pub fn append_content_nocopy(&mut self, content: impl Into<Vec<u8>>) {
+        if let Some(contents) = &mut self.content {
+            contents.push(Bytes::from(content.into()));
+        } else {
+            self.set_content_nocopy(content);
+        }
     }
     pub fn set_meta(&mut self, meta: impl Into<HashMap<String, String>>) {
         self.inner.meta = meta.into();
@@ -3707,7 +3743,7 @@ impl PutObjectOutput {
 #[use_inner]
 pub struct PutObjectFromBufferInput {
     pub(crate) inner: PutObjectBasicInput,
-    pub(crate) content: Option<Vec<u8>>,
+    pub(crate) content: Option<MultiBytes>,
 }
 
 impl InputDescriptor for PutObjectFromBufferInput {
@@ -3725,13 +3761,13 @@ impl InputDescriptor for PutObjectFromBufferInput {
 
 impl<B> InputTranslator<B> for PutObjectFromBufferInput
 where
-    B: BuildBufferReader,
+    B: BuildMultiBufferReader,
 {
     fn trans(&self, config_holder: Arc<ConfigHolder>) -> Result<HttpRequest<B>, TosError> {
         let mut request = self.inner.trans(config_holder)?;
         request.operation = self.operation();
         if let Some(content) = &self.content {
-            let (body, len) = B::new(content.to_owned())?;
+            let (body, len) = B::new(content.clone())?;
             request.body = Some(body);
             if self.inner.content_length < 0 {
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
@@ -3761,8 +3797,11 @@ impl PutObjectFromBufferInput {
     pub fn key(&self) -> &str {
         &self.inner.key
     }
-    pub fn content(&self) -> &Option<impl AsRef<[u8]>> {
-        &self.content
+    pub fn content(&self) -> Option<impl Iterator<Item=&Bytes>> {
+        match &self.content {
+            None => None,
+            Some(x) => Some(x.inner.iter()),
+        }
     }
     pub fn content_md5(&self) -> &str {
         &self.inner.content_md5
@@ -3803,12 +3842,46 @@ impl PutObjectFromBufferInput {
     pub fn set_key(&mut self, key: impl Into<String>) {
         self.inner.key = key.into();
     }
+    pub fn set_content_with_bytes_list(&mut self, bytes_list: impl Iterator<Item=impl Into<Bytes>>) {
+        let mut list = LinkedList::new();
+        let mut size = 0;
+        for item in bytes_list {
+            let item = item.into();
+            size += item.len();
+            list.push_back(item);
+        }
+        self.content = Some(MultiBytes::new(list, size));
+    }
     pub fn set_content(&mut self, content: impl AsRef<[u8]>) {
-        self.content = Some(content.as_ref().to_owned());
+        let item = content.as_ref().to_owned();
+        let size = item.len();
+        let mut list = LinkedList::new();
+        list.push_back(Bytes::from(item));
+        self.content = Some(MultiBytes::new(list, size));
+    }
+    pub fn append_content(&mut self, content: impl AsRef<[u8]>) {
+        if let Some(contents) = &mut self.content {
+            contents.push(Bytes::from(content.as_ref().to_owned()));
+        } else {
+            self.set_content(content);
+        }
     }
     pub fn set_content_nocopy(&mut self, content: impl Into<Vec<u8>>) {
-        self.content = Some(content.into());
+        let item = content.into();
+        let size = item.len();
+        let mut list = LinkedList::new();
+        list.push_back(Bytes::from(item));
+        self.content = Some(MultiBytes::new(list, size));
     }
+
+    pub fn append_content_nocopy(&mut self, content: impl Into<Vec<u8>>) {
+        if let Some(contents) = &mut self.content {
+            contents.push(Bytes::from(content.into()));
+        } else {
+            self.set_content_nocopy(content);
+        }
+    }
+
     pub fn set_content_md5(&mut self, content_md5: impl Into<String>) {
         self.inner.content_md5 = content_md5.into();
     }
@@ -4102,7 +4175,7 @@ where
             match serde_json::to_string(self) {
                 Err(e) => return Err(TosError::client_error_with_cause("trans json error", GenericError::JsonError(e.to_string()))),
                 Ok(json) => {
-                    let (body, len) = B::new(json.into_bytes())?;
+                    let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                     request.body = Some(body);
                     request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 }
@@ -4394,7 +4467,7 @@ where
                 map_insert(&mut query, QUERY_VERSION_ID, &self.version_id);
                 request.query = Some(query);
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -4851,7 +4924,7 @@ where
                 request.method = HttpMethodPost;
                 let header = &mut request.header;
                 header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 set_http_basic_header_for_fetch(header, config_holder.disable_encoding_meta, self);
@@ -5253,7 +5326,7 @@ where
                 request.method = HttpMethodPost;
                 let header = &mut request.header;
                 header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 set_http_basic_header_for_fetch(header, config_holder.disable_encoding_meta, self);
@@ -5764,7 +5837,7 @@ where
                 map_insert(&mut query, QUERY_VERSION_ID, &self.version_id);
                 request.query = Some(query);
                 request.header.insert(HEADER_CONTENT_MD5, base64_md5(&json));
-                let (body, len) = B::new(json.into_bytes())?;
+                let (body, len) = B::new(Bytes::from(json.into_bytes()))?;
                 request.body = Some(body);
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
                 Ok(request)
@@ -6397,7 +6470,7 @@ pub(crate) struct ModifyObjectFromBufferInput {
     pub(crate) bucket: String,
     pub(crate) key: String,
     pub(crate) offset: i64,
-    pub(crate) content: Option<Vec<u8>>,
+    pub(crate) content: Option<MultiBytes>,
 
     pub(crate) content_length: i64,
     pub(crate) traffic_limit: i64,
@@ -6461,8 +6534,11 @@ impl ModifyObjectFromBufferInput {
     pub fn key(&self) -> &str {
         &self.key
     }
-    pub fn content(&self) -> &Option<impl AsRef<[u8]>> {
-        &self.content
+    pub fn content(&self) -> Option<impl Iterator<Item=&Bytes>> {
+        match &self.content {
+            None => None,
+            Some(x) => Some(x.inner.iter()),
+        }
     }
     pub fn offset(&self) -> i64 {
         self.offset
@@ -6494,12 +6570,44 @@ impl ModifyObjectFromBufferInput {
     pub fn set_offset(&mut self, offset: i64) {
         self.offset = offset;
     }
-
+    pub fn set_content_with_bytes_list(&mut self, bytes_list: impl Iterator<Item=impl Into<Bytes>>) {
+        let mut list = LinkedList::new();
+        let mut size = 0;
+        for item in bytes_list {
+            let item = item.into();
+            size += item.len();
+            list.push_back(item);
+        }
+        self.content = Some(MultiBytes::new(list, size));
+    }
     pub fn set_content(&mut self, content: impl AsRef<[u8]>) {
-        self.content = Some(content.as_ref().to_owned());
+        let item = content.as_ref().to_owned();
+        let size = item.len();
+        let mut list = LinkedList::new();
+        list.push_back(Bytes::from(item));
+        self.content = Some(MultiBytes::new(list, size));
+    }
+    pub fn append_content(&mut self, content: impl AsRef<[u8]>) {
+        if let Some(contents) = &mut self.content {
+            contents.push(Bytes::from(content.as_ref().to_owned()));
+        } else {
+            self.set_content(content);
+        }
     }
     pub fn set_content_nocopy(&mut self, content: impl Into<Vec<u8>>) {
-        self.content = Some(content.into());
+        let item = content.into();
+        let size = item.len();
+        let mut list = LinkedList::new();
+        list.push_back(Bytes::from(item));
+        self.content = Some(MultiBytes::new(list, size));
+    }
+
+    pub fn append_content_nocopy(&mut self, content: impl Into<Vec<u8>>) {
+        if let Some(contents) = &mut self.content {
+            contents.push(Bytes::from(content.into()));
+        } else {
+            self.set_content_nocopy(content);
+        }
     }
     pub fn set_content_length(&mut self, content_length: i64) {
         self.content_length = content_length;
@@ -6531,7 +6639,7 @@ impl InputDescriptor for ModifyObjectFromBufferInput {
 
 impl<B> InputTranslator<B> for ModifyObjectFromBufferInput
 where
-    B: BuildBufferReader,
+    B: BuildMultiBufferReader,
 {
     fn trans(&self, _: Arc<ConfigHolder>) -> Result<HttpRequest<B>, TosError> {
         if self.offset < 0
@@ -6575,7 +6683,7 @@ where
         query.insert(QUERY_OFFSET, self.offset.to_string());
         request.query = Some(query);
         if let Some(content) = &self.content {
-            let (body, len) = B::new(content.to_owned())?;
+            let (body, len) = B::new(content.clone())?;
             request.body = Some(body);
             if self.content_length < 0 {
                 request.header.insert(HEADER_CONTENT_LENGTH, len.to_string());
@@ -6590,7 +6698,7 @@ pub struct DoesObjectExistInput {
     pub(crate) bucket: String,
     pub(crate) key: String,
     pub(crate) version_id: String,
-    // todo xsj
+    // todo xsj 支持该参数
     pub(crate) is_only_in_tos: bool,
 }
 

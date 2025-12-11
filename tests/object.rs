@@ -73,6 +73,32 @@ fn test_main() {
     test_put_object_acl(&context);
     test_set_object_meta(&context);
     test_put_object_from_file(&context);
+    test_multi_contents(&context);
+}
+
+fn test_multi_contents(context: &Context) {
+    let client = context.client();
+    let bucket = context.fixed_bucket();
+    let key = gen_random_string(10);
+    let key = key.as_str();
+    let data = "hello world";
+    let mut input = PutObjectFromBufferInput::new(bucket, key);
+    input.append_content_nocopy(data);
+    input.append_content_nocopy(data);
+
+    let o = client.put_object_from_buffer(&input).unwrap();
+    assert!(o.request_id().len() > 0);
+
+    let ginput = GetObjectInput::new(bucket, key);
+    let mut o = client.get_object(&ginput).unwrap();
+    assert!(o.request_id().len() > 0);
+    assert!(o.etag().len() > 0);
+    let buf = read_to_string(o.content().unwrap());
+    let mut new_data = String::with_capacity(data.len() * 3);
+    new_data.push_str(data);
+    new_data.push_str(data);
+    assert_eq!(buf, new_data);
+    println!("{}", buf);
 }
 
 fn test_put_object(context: &Context) {
@@ -101,7 +127,7 @@ fn test_put_object(context: &Context) {
     }
 
     // 所有参数上传对象
-    let input = &mut PutObjectInput::<Cursor<&str>>::new_with_content(bucket, key, Cursor::new(data));
+    let input = &mut PutObjectFromBufferInput::new_with_content(bucket, key, data);
     input.set_storage_class(StorageClassIa);
     input.set_acl(ACLPublicRead);
     input.set_content_disposition("attachment; filename=中文.txt");
@@ -115,7 +141,7 @@ fn test_put_object(context: &Context) {
     input.set_website_redirect_location("http://test-website-redirection-location");
     input.set_content_md5(base64_md5(data));
     input.set_rate_limiter(RateLimiter::new(1024 * 1024 * 30, 1024 * 1024));
-    let o = client.put_object(input).unwrap();
+    let o = client.put_object_from_buffer(input).unwrap();
     assert!(o.request_id().len() > 0);
     assert!(o.etag().len() > 0);
     assert_eq!(o.status_code(), 200);
