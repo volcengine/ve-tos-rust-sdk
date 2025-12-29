@@ -172,7 +172,7 @@ impl BuildBufferReader for InternalReader<StreamVec> {
 impl Stream for MultiBytes {
     type Item = reqwest::Result<Bytes>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.inner.is_empty() {
             return Poll::Ready(None);
         }

@@ -40,6 +40,7 @@ use crate::object::{AppendObjectBasicInput, AppendObjectFromBufferInput, AppendO
 use crate::reader::{InternalReader, MultiBytes, MultifunctionalReader};
 use crate::tos::ConfigAware;
 use arc_swap::ArcSwap;
+use async_channel::Sender;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::future::BoxFuture;
@@ -47,7 +48,7 @@ use futures_core::Stream;
 use reqwest::{redirect, Body, Client, Proxy, RequestBuilder};
 use std::collections::HashMap;
 use std::error::Error;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -88,7 +89,7 @@ pub struct TosClientBuilder<P, C, S>
 impl<P, C, S> TosClientBuilder<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Clone + Send + Sync + 'static,
+    C: Credentials + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
     pub fn build(mut self) -> Result<TosClientImpl<P, C, S>, TosError> {
@@ -176,7 +177,8 @@ where
 
         let async_runtime = Arc::new(self.async_runtime);
         let closed = Arc::new(AtomicI8::new(0));
-
+        let mut _handlers = create_handlers::<S>();
+        let (sender, _receiver) = async_channel::bounded(1);
         #[cfg(feature = "tokio-runtime")]
         if self.config_holder.dns_cache_time > 0 {
             let port;
@@ -187,8 +189,10 @@ where
             } else {
                 port = 80;
             }
-            client = client.dns_resolver(Arc::new(crate::asynchronous::dns::InternalDnsResolver::new(self.config_holder.dns_cache_time,
-                                                                                                     port, async_runtime.clone(), closed.clone())));
+            let (resolver, handler) = crate::asynchronous::dns::InternalDnsResolver::new(self.config_holder.dns_cache_time, self.config_holder.dns_cache_async_refresh,
+                                                                                         port, async_runtime.clone(), closed.clone(), _receiver.clone());
+            client = client.dns_resolver(Arc::new(resolver));
+            _handlers.push(handler);
         }
 
         let cp;
@@ -227,25 +231,32 @@ where
                         async_runtime,
                         c: self.c,
                         closed,
+                        closed_sender: sender,
                     })
                 }
 
                 #[cfg(feature = "tokio-runtime")]
                 {
+                    let credentials_provider = Arc::new(cp);
+                    let inner_credentials = Arc::new(tokio::sync::RwLock::new(None));
+                    if !credentials_can_refresh {
+                        let handler = async_refresh_credentials(closed.clone(), async_runtime.clone(),
+                                                                credentials_provider.clone(), inner_credentials.clone(), _receiver.clone());
+                        _handlers.push(Some(handler));
+                    }
                     let tos_client = TosClientImpl {
                         client,
                         config_holder: ArcSwap::from(Arc::new(self.config_holder)),
-                        credentials_provider: ArcSwap::from(Arc::new(cp)),
+                        credentials_provider: ArcSwap::from(credentials_provider),
                         credentials_can_refresh,
                         async_runtime,
                         c: self.c,
                         closed,
-                        inner_credentials: Arc::new(tokio::sync::RwLock::new(None)),
+                        closed_sender: sender,
+                        inner_credentials,
                         cached_buckets: tokio::sync::RwLock::new(HashMap::new()),
+                        handlers: tokio::sync::Mutex::new(Some(_handlers)),
                     };
-                    if !credentials_can_refresh {
-                        tos_client.async_refresh_credentials();
-                    }
                     Ok(tos_client)
                 }
             }
@@ -373,6 +384,13 @@ where
         self.config_holder.dns_cache_time = dns_cache_time;
         self
     }
+
+    #[cfg(feature = "tokio-runtime")]
+    pub fn dns_cache_async_refresh(mut self, dns_cache_async_refresh: bool) -> Self {
+        self.config_holder.dns_cache_async_refresh = dns_cache_async_refresh;
+        self
+    }
+
     pub fn high_latency_log_threshold(mut self, high_latency_log_threshold: isize) -> Self {
         self.config_holder.high_latency_log_threshold = high_latency_log_threshold;
         self
@@ -441,6 +459,53 @@ pub fn static_credentials_provider(ak: impl Into<String>, sk: impl Into<String>,
                                    -> StaticCredentialsProvider<CommonCredentials> {
     StaticCredentialsProvider::new(ak, sk, security_token).unwrap()
 }
+#[cfg(not(feature = "tokio-runtime"))]
+fn create_handlers<S>() -> Vec<i32> {
+    Vec::with_capacity(2)
+}
+
+#[cfg(feature = "tokio-runtime")]
+fn create_handlers<S>() -> Vec<Option<BoxFuture<'static, Result<(), S::JoinError>>>>
+where
+    S: AsyncRuntime,
+{
+    Vec::with_capacity(2)
+}
+
+#[cfg(feature = "tokio-runtime")]
+fn async_refresh_credentials<P, C, S>(closed: Arc<AtomicI8>, async_runtime: Arc<S>,
+                                      credentials_provider: Arc<P>,
+                                      inner_credentials: Arc<tokio::sync::RwLock<Option<Arc<C>>>>,
+                                      receiver: async_channel::Receiver<()>) -> BoxFuture<'static, Result<(), S::JoinError>>
+where
+    P: CredentialsProvider<C> + Send + Sync + 'static,
+    C: Credentials + Send + Sync + 'static,
+    S: AsyncRuntime + Send + Sync + 'static,
+{
+    let async_runtime2 = async_runtime.clone();
+    async_runtime.spawn(async move {
+        loop {
+            if closed.load(Ordering::Acquire) == 1 {
+                return;
+            }
+            tokio::select! {
+                _ = async_runtime2.sleep(Duration::from_secs(crate::constant::CREDENTIALS_REFRESH_INTERVAL)) => {}
+
+                _ = receiver.recv() =>{
+                    return;
+                }
+            }
+
+            match credentials_provider.credentials(CREDENTIALS_EXPIRES).await {
+                Err(ex) => warn!("async load credentials error, {}", ex),
+                Ok(c) => {
+                    let mut inner_credentials = inner_credentials.write().await;
+                    *inner_credentials = Some(c.clone());
+                }
+            }
+        }
+    })
+}
 
 pub fn env_credentials_provider() -> EnvCredentialsProvider<CommonCredentials> {
     EnvCredentialsProvider::new().unwrap()
@@ -485,8 +550,10 @@ pub trait TosClient: BucketAPI + ObjectAPI + MultipartAPI + PaginatorAPI + Contr
 #[cfg(feature = "tokio-runtime")]
 pub(crate) type BucketCache = (GetBucketTypeOutput, chrono::DateTime<chrono::Utc>);
 
-#[derive(Debug)]
-pub struct TosClientImpl<P, C, S> {
+pub struct TosClientImpl<P, C, S>
+where
+    S: AsyncRuntime,
+{
     pub(crate) client: Client,
     pub(crate) config_holder: ArcSwap<ConfigHolder>,
     pub(crate) credentials_provider: ArcSwap<P>,
@@ -494,16 +561,34 @@ pub struct TosClientImpl<P, C, S> {
     pub(crate) c: PhantomData<C>,
     pub(crate) credentials_can_refresh: bool,
     pub(crate) closed: Arc<AtomicI8>,
+    pub(crate) closed_sender: Sender<()>,
 
     #[cfg(feature = "tokio-runtime")]
-    pub(crate) inner_credentials: Arc<tokio::sync::RwLock<Option<C>>>,
+    pub(crate) inner_credentials: Arc<tokio::sync::RwLock<Option<Arc<C>>>>,
     #[cfg(feature = "tokio-runtime")]
     pub(crate) cached_buckets: tokio::sync::RwLock<HashMap<String, BucketCache>>,
+    #[cfg(feature = "tokio-runtime")]
+    pub(crate) handlers: tokio::sync::Mutex<Option<Vec<Option<BoxFuture<'static, Result<(), S::JoinError>>>>>>,
 }
 
-unsafe impl<P, C, S> Sync for TosClientImpl<P, C, S> {}
+impl<P, C, S> Debug for TosClientImpl<P, C, S>
+where
+    S: AsyncRuntime,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "client: {:?}, config_holder: {:?}", self.client, self.config_holder)
+    }
+}
 
-impl<P, C, S> ConfigAware for TosClientImpl<P, C, S> {
+unsafe impl<P, C, S> Sync for TosClientImpl<P, C, S>
+where
+    S: AsyncRuntime,
+{}
+
+impl<P, C, S> ConfigAware for TosClientImpl<P, C, S>
+where
+    S: AsyncRuntime,
+{
     fn is_custom_domain(&self) -> bool {
         self.config_holder.load().is_custom_domain
     }
@@ -512,7 +597,7 @@ impl<P, C, S> ConfigAware for TosClientImpl<P, C, S> {
 impl<P, C, S> ObjectAPI for TosClientImpl<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Clone + Send + Sync + 'static,
+    C: Credentials + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
     async fn put_object<B>(&self, input: &PutObjectInput<B>) -> Result<PutObjectOutput, TosError>
@@ -832,7 +917,7 @@ where
 impl<P, C, S> BucketAPI for TosClientImpl<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Clone + Send + Sync + 'static,
+    C: Credentials + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
     async fn create_bucket(&self, input: &CreateBucketInput) -> Result<CreateBucketOutput, TosError> {
@@ -1137,7 +1222,7 @@ where
 impl<P, C, S> MultipartAPI for TosClientImpl<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Clone + Send + Sync + 'static,
+    C: Credentials + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
     async fn create_multipart_upload(&self, input: &CreateMultipartUploadInput) -> Result<CreateMultipartUploadOutput, TosError> {
@@ -1185,7 +1270,7 @@ where
 impl<P, C, S> SignerAPI for TosClientImpl<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Clone + Send + Sync + 'static,
+    C: Credentials + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
     async fn pre_signed_url(&self, input: &PreSignedURLInput) -> Result<PreSignedURLOutput, TosError> {
@@ -1216,7 +1301,7 @@ where
 #[async_trait]
 impl<P, C, S> ControlAPI for TosClientImpl<P, C, S>
 where
-    C: 'static + Credentials + Clone + Send + Sync,
+    C: 'static + Credentials + Send + Sync,
     P: 'static + CredentialsProvider<C> + Send + Sync,
     S: 'static + AsyncRuntime + Send + Sync,
 {
@@ -1237,7 +1322,7 @@ where
 impl<P, C, S> TosClient for TosClientImpl<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Clone + Send + Sync + 'static,
+    C: Credentials + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
     fn refresh_credentials(&self, ak: impl Into<String>, sk: impl Into<String>, security_token: impl Into<String>) -> bool {
@@ -1271,6 +1356,7 @@ where
             auto_recognize_content_type: c.auto_recognize_content_type,
             is_custom_domain: c.is_custom_domain,
             dns_cache_time: c.dns_cache_time,
+            dns_cache_async_refresh: c.dns_cache_async_refresh,
             proxy_host: c.proxy_host.to_string(),
             proxy_port: c.proxy_port,
             proxy_username: c.proxy_username.clone(),
@@ -1305,10 +1391,10 @@ where
 impl<P, C, S> TosClientImpl<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Clone + Send + Sync + 'static,
+    C: Credentials + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
-    async fn load_credentials(&self) -> Result<C, TosError> {
+    async fn load_credentials(&self) -> Result<Arc<C>, TosError> {
         #[cfg(feature = "tokio-runtime")]
         {
             let inner_credentials = self.inner_credentials.read().await;
@@ -1319,37 +1405,13 @@ where
         self.do_load_credentials().await
     }
 
-    async fn do_load_credentials(&self) -> Result<C, TosError> {
+    async fn do_load_credentials(&self) -> Result<Arc<C>, TosError> {
         let credential_provider = self.credentials_provider.load();
         match credential_provider.credentials(CREDENTIALS_EXPIRES).await {
             Err(ex) => Err(TosError::client_error_with_cause("load credentials error", GenericError::DefaultError(ex.to_string()))),
-            Ok(c) => Ok(c.clone()),
+            Ok(c) => Ok(c),
         }
     }
-
-    #[cfg(feature = "tokio-runtime")]
-    fn async_refresh_credentials(&self) {
-        let closed = self.closed.clone();
-        let async_runtime = self.async_runtime.clone();
-        let credential_provider = self.credentials_provider.load().clone();
-        let inner_credentials = self.inner_credentials.clone();
-        let _ = self.async_runtime.spawn(async move {
-            loop {
-                if closed.load(Ordering::Acquire) == 1 {
-                    return;
-                }
-                async_runtime.sleep(Duration::from_secs(crate::constant::CREDENTIALS_REFRESH_INTERVAL)).await;
-                match credential_provider.credentials(CREDENTIALS_EXPIRES).await {
-                    Err(ex) => warn!("async load credentials error, {}", ex),
-                    Ok(c) => {
-                        let mut inner_credentials = inner_credentials.write().await;
-                        *inner_credentials = Some(c.clone());
-                    }
-                }
-            }
-        });
-    }
-
 
     async fn modify_object<B>(&self, input: &ModifyObjectInput<B>) -> Result<ModifyObjectOutput, TosError>
     where
@@ -1687,13 +1749,32 @@ where
     }
 }
 
-impl<P, C, S> TosClientImpl<P, C, S> {
+impl<P, C, S> TosClientImpl<P, C, S>
+where
+    S: AsyncRuntime,
+{
     pub fn close(&self) {
         let _ = self.closed.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed);
     }
+
+    #[cfg(feature = "tokio-runtime")]
+    pub async fn shutdown(&self) {
+        self.close();
+        self.closed_sender.close();
+        if let Some(handlers) = self.handlers.lock().await.take() {
+            for handler in handlers {
+                if let Some(handler) = handler {
+                    let _ = handler.await;
+                }
+            }
+        }
+    }
 }
 
-impl<P, C, S> Drop for TosClientImpl<P, C, S> {
+impl<P, C, S> Drop for TosClientImpl<P, C, S>
+where
+    S: AsyncRuntime,
+{
     fn drop(&mut self) {
         self.close();
     }

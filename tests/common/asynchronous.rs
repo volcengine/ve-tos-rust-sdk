@@ -159,6 +159,11 @@ impl AsyncContext {
                 self.clean_bucket(self.fixed_bucket.as_str()).await;
             }
         }
+
+        #[cfg(feature = "tokio-runtime")]
+        {
+            self.client.shutdown().await;
+        }
     }
 
     async fn clean_bucket(&self, bucket: &str) {

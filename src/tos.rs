@@ -56,7 +56,7 @@ pub struct TosClientBuilder<P, C>
 impl<P, C> TosClientBuilder<P, C>
 where
     P: CredentialsProvider<C> + Debug,
-    C: Credentials + Clone + Debug,
+    C: Credentials + Debug,
 {
     pub fn build(mut self) -> Result<TosClientImpl<P, C>, TosError> {
         self.config_holder.check(self.endpoint, self.region)?;
@@ -357,7 +357,7 @@ pub struct TosClientImpl<P, C> {
 
 impl<P, C> BucketAPI for TosClientImpl<P, C>
 where
-    C: Credentials + Clone,
+    C: Credentials,
     P: CredentialsProvider<C>,
 {
     fn create_bucket(&self, input: &CreateBucketInput) -> Result<CreateBucketOutput, TosError> {
@@ -379,7 +379,7 @@ where
 
 impl<P, C> ObjectAPI for TosClientImpl<P, C>
 where
-    C: Credentials + Clone,
+    C: Credentials,
     P: CredentialsProvider<C>,
 {
     fn copy_object(&self, input: &CopyObjectInput) -> Result<CopyObjectOutput, TosError> {
@@ -489,7 +489,7 @@ where
 
 impl<P, C> MultipartAPI for TosClientImpl<P, C>
 where
-    C: Credentials + Clone,
+    C: Credentials,
     P: CredentialsProvider<C>,
 {
     fn create_multipart_upload(&self, input: &CreateMultipartUploadInput) -> Result<CreateMultipartUploadOutput, TosError> {
@@ -541,7 +541,7 @@ impl<P, C> ConfigAware for TosClientImpl<P, C>
 
 impl<P, C> SignerAPI for TosClientImpl<P, C>
 where
-    C: Credentials + Clone + Debug,
+    C: Credentials + Debug,
     P: CredentialsProvider<C> + Debug,
 {
     fn pre_signed_url(&self, input: &PreSignedURLInput) -> Result<PreSignedURLOutput, TosError> {
@@ -572,7 +572,7 @@ where
 impl<P, C> TosClient for TosClientImpl<P, C>
 where
     P: CredentialsProvider<C> + Debug,
-    C: Credentials + Clone + Debug,
+    C: Credentials + Debug,
 {
     fn refresh_credentials(&self, ak: impl Into<String>, sk: impl Into<String>, security_token: impl Into<String>) -> bool {
         if !self.credentials_can_refresh {
@@ -606,6 +606,7 @@ where
             auto_recognize_content_type: c.auto_recognize_content_type,
             is_custom_domain: c.is_custom_domain,
             dns_cache_time: c.dns_cache_time,
+            dns_cache_async_refresh: c.dns_cache_async_refresh,
             proxy_host: c.proxy_host.to_string(),
             proxy_port: c.proxy_port,
             proxy_username: c.proxy_username.clone(),
@@ -640,13 +641,13 @@ where
 impl<P, C> TosClientImpl<P, C>
 where
     P: CredentialsProvider<C>,
-    C: Credentials + Clone,
+    C: Credentials,
 {
-    fn load_credentials(&self) -> Result<C, TosError> {
+    fn load_credentials(&self) -> Result<Arc<C>, TosError> {
         let credential_provider = self.credentials_provider.load();
         match credential_provider.credentials(CREDENTIALS_EXPIRES) {
             Err(ex) => Err(TosError::client_error_with_cause("load credentials error", GenericError::DefaultError(ex.to_string()))),
-            Ok(c) => Ok(c.clone()),
+            Ok(c) => Ok(c),
         }
     }
 

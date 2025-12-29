@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::ops::Add;
+use std::sync::Arc;
 use tokio::runtime;
 use ve_tos_rust_sdk::asynchronous::bucket::BucketAPI;
 use ve_tos_rust_sdk::asynchronous::credential::CredentialsProvider;
@@ -85,16 +86,17 @@ impl Credentials for CustomizeCredentials {
 
 #[derive(Default)]
 struct CustomizeCredentialProvider<C> {
-    cred: C,
+    cred: tokio::sync::Mutex<Arc<C>>,
 }
 
 #[async_trait]
 impl<C> CredentialsProvider<C> for CustomizeCredentialProvider<C>
 where
-    C: Credentials + Sync,
+    C: Credentials + Send + Sync,
 {
-    async fn credentials(&self, expires: i64) -> Result<&C, Box<dyn StdError + Send + Sync>> {
-        Ok(&self.cred)
+    async fn credentials(&self, expires: i64) -> Result<Arc<C>, Box<dyn StdError + Send + Sync>> {
+        let cred = self.cred.lock().await;
+        Ok(cred.clone())
     }
 
     fn new(c: C) -> Result<Self, Box<dyn StdError + Send + Sync>> {
@@ -109,12 +111,13 @@ async fn test_credential_provider(context: &AsyncContext) {
     let ep = env::var("TOS_ENDPOINT").unwrap_or("".to_string());
     let client = tos::builder_common::<CustomizeCredentialProvider<CustomizeCredentials>, CustomizeCredentials, TokioRuntime>()
         .region("test-region")
-        .credentials_provider(CustomizeCredentialProvider { cred })
+        .credentials_provider(CustomizeCredentialProvider { cred: tokio::sync::Mutex::new(Arc::new(cred)) })
         .endpoint(ep.clone()).build().unwrap();
 
     let o = client.list_buckets(&ListBucketsInput::new()).await.unwrap();
     assert!(o.request_id().len() > 0);
     println!("{}", o.buckets().len());
+    client.shutdown().await;
 
     let client = tos::builder_common::<StaticCredentialsProvider<CommonCredentials>, CommonCredentials, TokioRuntime>()
         .region("test-region")

@@ -31,7 +31,7 @@ pub trait CredentialsProvider<C>: Sized
 where
     C: Credentials,
 {
-    fn credentials(&self, expires: i64) -> Result<&C, Box<dyn StdError + Send + Sync>>;
+    fn credentials(&self, expires: i64) -> Result<Arc<C>, Box<dyn StdError + Send + Sync>>;
 
     fn new(c: C) -> Result<Self, Box<dyn StdError + Send + Sync>>;
 }
@@ -39,20 +39,20 @@ where
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CommonCredentialsProvider<C> {
-    pub(crate) credentials: C,
+    pub(crate) credentials: Arc<C>,
 }
 
 impl<C> CredentialsProvider<C> for CommonCredentialsProvider<C>
 where
     C: Credentials,
 {
-    fn credentials(&self, _: i64) -> Result<&C, Box<dyn StdError + Send + Sync>> {
-        Ok(&self.credentials)
+    fn credentials(&self, _: i64) -> Result<Arc<C>, Box<dyn StdError + Send + Sync>> {
+        Ok(self.credentials.clone())
     }
 
     fn new(c: C) -> Result<Self, Box<dyn StdError + Send + Sync>> {
         Ok(CommonCredentialsProvider {
-            credentials: c,
+            credentials: Arc::new(c),
         })
     }
 }
@@ -84,7 +84,7 @@ impl Credentials for CommonCredentials {
 
 #[derive(Default)]
 pub struct StaticCredentialsProvider<C> {
-    pub(crate) cred: C,
+    pub(crate) cred: Arc<C>,
 }
 
 impl<C> StaticCredentialsProvider<C>
@@ -104,7 +104,7 @@ where
         }
 
         let cred = C::new(ak, sk, security_token)?;
-        Ok(Self { cred })
+        Ok(Self { cred: Arc::new(cred) })
     }
 }
 
@@ -112,20 +112,20 @@ impl<C> CredentialsProvider<C> for StaticCredentialsProvider<C>
 where
     C: Credentials,
 {
-    fn credentials(&self, _: i64) -> Result<&C, Box<dyn StdError + Send + Sync>> {
-        Ok(&self.cred)
+    fn credentials(&self, _: i64) -> Result<Arc<C>, Box<dyn StdError + Send + Sync>> {
+        Ok(self.cred.clone())
     }
 
     fn new(cred: C) -> Result<Self, Box<dyn StdError + Send + Sync>> {
         Ok(Self {
-            cred
+            cred: Arc::new(cred),
         })
     }
 }
 
 #[derive(Default)]
 pub struct EnvCredentialsProvider<C> {
-    pub(crate) cred: C,
+    pub(crate) cred: Arc<C>,
 }
 
 impl<C> EnvCredentialsProvider<C>
@@ -146,7 +146,7 @@ where
             }
         }
         let cred = C::new(ak, sk, security_token)?;
-        Ok(Self { cred })
+        Ok(Self { cred: Arc::new(cred) })
     }
 }
 
@@ -155,13 +155,13 @@ impl<C> CredentialsProvider<C> for EnvCredentialsProvider<C>
 where
     C: Credentials,
 {
-    fn credentials(&self, _: i64) -> Result<&C, Box<dyn StdError + Send + Sync>> {
-        Ok(&self.cred)
+    fn credentials(&self, _: i64) -> Result<Arc<C>, Box<dyn StdError + Send + Sync>> {
+        Ok(self.cred.clone())
     }
 
     fn new(cred: C) -> Result<Self, Box<dyn StdError + Send + Sync>> {
         Ok(Self {
-            cred
+            cred: Arc::new(cred),
         })
     }
 }

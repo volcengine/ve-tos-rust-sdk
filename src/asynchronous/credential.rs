@@ -16,13 +16,14 @@
 use crate::credential::{CommonCredentialsProvider, Credentials, EnvCredentialsProvider, StaticCredentialsProvider};
 use async_trait::async_trait;
 use serde::de::StdError;
+use std::sync::Arc;
 
 #[async_trait]
 pub trait CredentialsProvider<C>: Sized
 where
     C: Credentials,
 {
-    async fn credentials(&self, expires: i64) -> Result<&C, Box<dyn StdError + Send + Sync>>;
+    async fn credentials(&self, expires: i64) -> Result<Arc<C>, Box<dyn StdError + Send + Sync>>;
 
     fn new(c: C) -> Result<Self, Box<dyn StdError + Send + Sync>>;
 }
@@ -30,15 +31,15 @@ where
 #[async_trait]
 impl<C> CredentialsProvider<C> for CommonCredentialsProvider<C>
 where
-    C: Credentials + Sync,
+    C: Credentials + Send + Sync,
 {
-    async fn credentials(&self, _: i64) -> Result<&C, Box<dyn StdError + Send + Sync>> {
-        Ok(&self.credentials)
+    async fn credentials(&self, _: i64) -> Result<Arc<C>, Box<dyn StdError + Send + Sync>> {
+        Ok(self.credentials.clone())
     }
 
     fn new(c: C) -> Result<Self, Box<dyn StdError + Send + Sync>> {
         Ok(CommonCredentialsProvider {
-            credentials: c,
+            credentials: Arc::new(c),
         })
     }
 }
@@ -46,15 +47,15 @@ where
 #[async_trait]
 impl<C> CredentialsProvider<C> for StaticCredentialsProvider<C>
 where
-    C: Credentials + Sync,
+    C: Credentials + Send + Sync,
 {
-    async fn credentials(&self, _: i64) -> Result<&C, Box<dyn StdError + Send + Sync>> {
-        Ok(&self.cred)
+    async fn credentials(&self, _: i64) -> Result<Arc<C>, Box<dyn StdError + Send + Sync>> {
+        Ok(self.cred.clone())
     }
 
     fn new(cred: C) -> Result<Self, Box<dyn StdError + Send + Sync>> {
         Ok(Self {
-            cred
+            cred: Arc::new(cred),
         })
     }
 }
@@ -62,15 +63,15 @@ where
 #[async_trait]
 impl<C> CredentialsProvider<C> for EnvCredentialsProvider<C>
 where
-    C: Credentials + Sync,
+    C: Credentials + Send + Sync,
 {
-    async fn credentials(&self, _: i64) -> Result<&C, Box<dyn StdError + Send + Sync>> {
-        Ok(&self.cred)
+    async fn credentials(&self, _: i64) -> Result<Arc<C>, Box<dyn StdError + Send + Sync>> {
+        Ok(self.cred.clone())
     }
 
     fn new(cred: C) -> Result<Self, Box<dyn StdError + Send + Sync>> {
         Ok(Self {
-            cred
+            cred: Arc::new(cred),
         })
     }
 }

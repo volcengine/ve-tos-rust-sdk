@@ -938,8 +938,6 @@ where
         let header = &mut request.header;
         if self.complete_all {
             header.insert(HEADER_COMPLETE_ALL, "yes".to_string());
-        } else if self.parts.len() == 0 {
-            return Err(TosError::client_error("empty parts for complete multipart upload"));
         } else {
             let mut parts = Vec::with_capacity(self.parts.len());
             for part in self.parts.iter() {

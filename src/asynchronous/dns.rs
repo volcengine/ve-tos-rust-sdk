@@ -17,7 +17,9 @@ use crate::asynchronous::tos::AsyncRuntime;
 use crate::constant::DNS_CACHE_REFRESH_INTERVAL;
 use crate::error::TosError;
 use arc_swap::ArcSwap;
+use async_channel::Receiver;
 use chrono::{DateTime, Utc};
+use futures_core::future::BoxFuture;
 use hickory_resolver::lookup_ip::LookupIp;
 use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::{ResolveError, Resolver};
@@ -51,7 +53,7 @@ pub(crate) struct InternalDnsResolver {
 }
 
 impl InternalDnsResolver {
-    pub(crate) fn new<S>(dns_cache_time: isize, port: isize, async_runtime: Arc<S>, closed: Arc<AtomicI8>) -> Self
+    pub(crate) fn new<S>(dns_cache_time: isize, dns_cache_async_refresh: bool, port: isize, async_runtime: Arc<S>, closed: Arc<AtomicI8>, receiver: Receiver<()>) -> (Self, Option<BoxFuture<'static, Result<(), S::JoinError>>>)
     where
         S: AsyncRuntime + Send + Sync + 'static,
     {
@@ -61,48 +63,41 @@ impl InternalDnsResolver {
         let async_runtime2 = async_runtime.clone();
         let cached_addrs2 = cached_addrs.clone();
         let resolver2 = resolver.clone();
-        let _ = async_runtime.spawn(async move {
-            loop {
-                if closed.load(Ordering::Acquire) == 1 {
-                    return;
-                }
-                async_runtime2.sleep(Duration::from_secs(DNS_CACHE_REFRESH_INTERVAL)).await;
-                let mut cached_addrs_values;
-                {
-                    let cached_addrs2 = cached_addrs2.read().await;
-                    cached_addrs_values = Vec::with_capacity(cached_addrs2.len());
-                    for cached_addr in cached_addrs2.values() {
-                        cached_addrs_values.push(cached_addr.clone());
+        let mut handler = None;
+        if dns_cache_async_refresh {
+            handler = Some(async_runtime.spawn(async move {
+                loop {
+                    if closed.load(Ordering::Acquire) == 1 {
+                        return;
+                    }
+
+
+                    tokio::select! {
+                    _ = async_runtime2.sleep(Duration::from_secs(DNS_CACHE_REFRESH_INTERVAL)) => {
+
+                    }
+                    _ = receiver.recv() =>{
+                        return;
                     }
                 }
 
-                for cached_addrs_value in cached_addrs_values {
-                    let cached_addrs_value2 = cached_addrs_value.load();
-                    if (Utc::now() - cached_addrs_value2.last_update_at).num_milliseconds() <= 1000 {
-                        continue;
-                    }
-                    match resolver2.lookup_ip(cached_addrs_value2.host.as_str()).await {
-                        Err(ex) => {
-                            warn!("async resolve from {} is failed, {}", cached_addrs_value2.host, ex.to_string());
-                            cached_addrs_value.store(Arc::new(DnsCacheItem {
-                                host: cached_addrs_value2.host.clone(),
-                                addrs: cached_addrs_value2.addrs.clone(),
-                                ddl: cached_addrs_value2.ddl,
-                                immortal: true,
-                                last_update_at: cached_addrs_value2.last_update_at,
-                            }));
+                    let mut cached_addrs_values;
+                    {
+                        let cached_addrs2 = cached_addrs2.read().await;
+                        cached_addrs_values = Vec::with_capacity(cached_addrs2.len());
+                        for cached_addr in cached_addrs2.values() {
+                            cached_addrs_values.push(cached_addr.clone());
                         }
-                        Ok(ips) => {
-                            let mut addrs = Vec::<SocketAddr>::with_capacity(10);
-                            for ip in ips.iter() {
-                                match ip {
-                                    IpAddr::V4(ipv4) => addrs.push(SocketAddr::V4(SocketAddrV4::new(ipv4, port as u16))),
-                                    IpAddr::V6(ipv6) => addrs.push(SocketAddr::V6(SocketAddrV6::new(ipv6, port as u16, 0, 0)))
-                                }
-                            }
+                    }
 
-                            if addrs.len() == 0 {
-                                warn!("async resolve from {} is empty", cached_addrs_value2.host);
+                    for cached_addrs_value in cached_addrs_values {
+                        let cached_addrs_value2 = cached_addrs_value.load();
+                        if (Utc::now() - cached_addrs_value2.last_update_at).num_milliseconds() <= 1000 {
+                            continue;
+                        }
+                        match resolver2.lookup_ip(cached_addrs_value2.host.as_str()).await {
+                            Err(ex) => {
+                                warn!("async resolve from {} is failed, {}", cached_addrs_value2.host, ex.to_string());
                                 cached_addrs_value.store(Arc::new(DnsCacheItem {
                                     host: cached_addrs_value2.host.clone(),
                                     addrs: cached_addrs_value2.addrs.clone(),
@@ -110,31 +105,50 @@ impl InternalDnsResolver {
                                     immortal: true,
                                     last_update_at: cached_addrs_value2.last_update_at,
                                 }));
-                                return;
                             }
+                            Ok(ips) => {
+                                let mut addrs = Vec::<SocketAddr>::with_capacity(10);
+                                for ip in ips.iter() {
+                                    match ip {
+                                        IpAddr::V4(ipv4) => addrs.push(SocketAddr::V4(SocketAddrV4::new(ipv4, port as u16))),
+                                        IpAddr::V6(ipv6) => addrs.push(SocketAddr::V6(SocketAddrV6::new(ipv6, port as u16, 0, 0)))
+                                    }
+                                }
 
-                            let mut rng = thread_rng();
-                            let dns_cache_time = dns_cache_time + rng.gen_range(0..5) as isize;
-                            let now = Utc::now();
-                            cached_addrs_value.store(Arc::new(DnsCacheItem {
-                                host: cached_addrs_value2.host.clone(),
-                                addrs: addrs.clone(),
-                                ddl: now.add(Duration::from_secs((dns_cache_time * 60) as u64)),
-                                immortal: false,
-                                last_update_at: now,
-                            }));
+                                if addrs.len() == 0 {
+                                    warn!("async resolve from {} is empty", cached_addrs_value2.host);
+                                    cached_addrs_value.store(Arc::new(DnsCacheItem {
+                                        host: cached_addrs_value2.host.clone(),
+                                        addrs: cached_addrs_value2.addrs.clone(),
+                                        ddl: cached_addrs_value2.ddl,
+                                        immortal: true,
+                                        last_update_at: cached_addrs_value2.last_update_at,
+                                    }));
+                                    return;
+                                }
+
+                                let mut rng = thread_rng();
+                                let dns_cache_time = dns_cache_time + rng.gen_range(0..5) as isize;
+                                let now = Utc::now();
+                                cached_addrs_value.store(Arc::new(DnsCacheItem {
+                                    host: cached_addrs_value2.host.clone(),
+                                    addrs: addrs.clone(),
+                                    ddl: now.add(Duration::from_secs((dns_cache_time * 60) as u64)),
+                                    immortal: false,
+                                    last_update_at: now,
+                                }));
+                            }
                         }
                     }
                 }
-            }
-        });
-
-        Self {
+            }));
+        }
+        (Self {
             dns_cache_time,
             port,
             resolver,
             cached_addrs,
-        }
+        }, handler)
     }
 }
 

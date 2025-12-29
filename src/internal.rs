@@ -938,11 +938,11 @@ pub(crate) fn build_certificate(ca_crt: &str) -> Result<Certificate, TosError> {
     }
 }
 
-pub(crate) fn build_identity(client_crt: &str, client_key: &str) -> Result<Identity, TosError> {
+pub(crate) fn build_identity(client_crt: &str, _client_key: &str) -> Result<Identity, TosError> {
     let crt = load_file_to_buf(client_crt)?;
     #[cfg(feature = "use-native-tls")]
     {
-        let key = crate::internal::load_file_to_buf(client_key)?;
+        let key = crate::internal::load_file_to_buf(_client_key)?;
         return match Identity::from_pkcs8_pem(&crt, &key) {
             Err(ex) => Err(TosError::client_error_with_cause("build identity error", GenericError::IoError(ex.to_string()))),
             Ok(identity) => Ok(identity)

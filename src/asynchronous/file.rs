@@ -128,7 +128,7 @@ impl BuildFileStream for FileReader {
 impl<P, C, S> TosClientImpl<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Clone + Send + Sync + 'static,
+    C: Credentials + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
     pub(crate) async fn do_request_af<F, K, B>(&self, input: &F) -> Result<K, TosError>

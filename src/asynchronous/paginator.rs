@@ -34,7 +34,7 @@ pub trait PaginatorAPI {
 impl<P, C, S> PaginatorAPI for TosClientImpl<P, C, S>
 where
     P: CredentialsProvider<C> + Send + Sync + 'static,
-    C: Credentials + Clone + Send + Sync + 'static,
+    C: Credentials + Send + Sync + 'static,
     S: AsyncRuntime + Send + Sync + 'static,
 {
     fn new_list_objects_type2_paginator(self: &Arc<Self>, input: &ListObjectsType2Input, recursive_for_delimiter: bool) -> Result<impl ListObjectsType2Paginator, TosError>
