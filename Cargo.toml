@@ -1,6 +1,6 @@
 [package]
 name = "ve-tos-rust-sdk"
-version = "2.9.6"
+version = "2.9.13"
 edition = "2021"
 authors = ["xiangshijian"]
 description = "volcengine offical tos rust sdk"

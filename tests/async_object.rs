@@ -621,7 +621,7 @@ async fn test_append_object(context: &AsyncContext) {
     let e = client
         .append_object_from_buffer(&AppendObjectFromBufferInput::new_with_content(context.non_exists_bucket(), key, data)).await.expect_err("");
     assert!(e.is_server_error());
-    assert_eq!(e.as_server_error().unwrap().code(), "NoSuchBucket");
+    assert_eq!(e.as_server_error().unwrap().ec(), "0006-00000001");
 }
 
 

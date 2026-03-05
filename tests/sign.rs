@@ -21,6 +21,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use tokio::runtime;
 use tracing::log::{debug, error, info, warn};
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
 use ve_tos_rust_sdk::asynchronous::auth::SignerAPI;
 use ve_tos_rust_sdk::asynchronous::object::ObjectAPI;
@@ -39,7 +40,6 @@ fn test_main() {
         .enable_all()
         .build()
         .unwrap();
-
     let file_appender = tracing_appender::rolling::daily("temp/logs", "app.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 

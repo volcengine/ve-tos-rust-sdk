@@ -53,9 +53,34 @@ fn test_main() {
     }
 
     rt.block_on(async {
+        test_empty_multipart_upload(&context).await;
         test_multipart_list(&context).await;
         test_multipart_upload(&context).await;
     });
+}
+
+async fn test_empty_multipart_upload(context: &AsyncContext) {
+    let client = context.client();
+    let bucket = context.fixed_bucket();
+    let key = gen_random_string(10);
+    let key = key.as_str();
+    let o = client.create_multipart_upload(&CreateMultipartUploadInput::new(bucket, key)).await.unwrap();
+    assert!(o.request_id().len() > 0);
+    assert!(o.upload_id().len() > 0);
+    let upload_id = o.upload_id();
+
+    let o = client.complete_multipart_upload(
+        &CompleteMultipartUploadInput::new_with_parts(bucket, key, upload_id, Vec::new())).await.unwrap_err();
+    assert!(o.message().len() > 0);
+
+    let o = client.upload_part_from_buffer(&UploadPartFromBufferInput::new(bucket, key, upload_id)).await.unwrap();
+    assert!(o.request_id().len() > 0);
+
+    let o = client.complete_multipart_upload(
+        &CompleteMultipartUploadInput::new_with_parts(bucket, key, upload_id, Vec::from([UploadedPart::new(1, o.etag())]))).await.unwrap();
+    assert!(o.request_id().len() > 0);
+    assert!(o.hash_crc64ecma() == 0);
+    println!("complete parts done, {}", o.hash_crc64ecma());
 }
 
 async fn test_multipart_upload(context: &AsyncContext) {

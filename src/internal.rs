@@ -688,6 +688,10 @@ pub(crate) fn get_header_value_from_str<F: FromStr>(header: &HeaderMap, key: &st
 
             match value.to_str() {
                 Ok(v) => {
+                    let v = v.trim();
+                    if v.is_empty() {
+                        return Ok(def);
+                    }
                     match v.parse::<F>() {
                         Ok(x) => Ok(x),
                         Err(_) => Err(TosError::client_error(format!("parse value error with input {}", v)))

@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 use common::gen_random_string;
+use tracing::log::{error, info};
 use ve_tos_rust_sdk::bucket::ListBucketsInput;
 use ve_tos_rust_sdk::bucket::{BucketAPI, CreateBucketInput, DeleteBucketInput, HeadBucketInput};
+use ve_tos_rust_sdk::common::init_tracing_logs;
 use ve_tos_rust_sdk::enumeration::{ACLType, AzRedundancyType, StorageClassType};
 
 use crate::common::{create_context, Context};
@@ -24,10 +26,17 @@ mod common;
 
 #[test]
 fn test_main() {
+    let mut other_logs = Vec::with_capacity(1);
+    other_logs.push(("exception".to_string(), "warn".to_string()));
+    other_logs.push(("access".to_string(), "info".to_string()));
+    let _guards = init_tracing_logs(("app".to_string(), "info".to_string()), other_logs.into_iter(),
+                                    "temp/logs", 30 * 1024 * 1024, true, 30);
     let context = &create_context();
     test_list_buckets(context);
     test_create_bucket(context);
     test_invalid_argument(context);
+    info!(target:"access", "test access");
+    error!(target:"exception", "test error");
 }
 
 fn test_list_buckets(context: &Context) {

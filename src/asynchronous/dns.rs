@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 use crate::asynchronous::tos::AsyncRuntime;
+use crate::common::get_common_log_target;
 use crate::constant::DNS_CACHE_REFRESH_INTERVAL;
 use crate::error::TosError;
 use arc_swap::ArcSwap;
@@ -34,7 +35,7 @@ use std::sync::atomic::{AtomicI8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{RwLock, RwLockWriteGuard};
-use tracing::warn;
+use tracing::log::warn;
 
 pub(crate) struct DnsCacheItem {
     pub(crate) host: String,
@@ -73,13 +74,11 @@ impl InternalDnsResolver {
 
 
                     tokio::select! {
-                    _ = async_runtime2.sleep(Duration::from_secs(DNS_CACHE_REFRESH_INTERVAL)) => {
-
+                        _ = async_runtime2.sleep(Duration::from_secs(DNS_CACHE_REFRESH_INTERVAL)) => {}
+                        _ = receiver.recv() =>{
+                            return;
+                        }
                     }
-                    _ = receiver.recv() =>{
-                        return;
-                    }
-                }
 
                     let mut cached_addrs_values;
                     {
@@ -97,7 +96,7 @@ impl InternalDnsResolver {
                         }
                         match resolver2.lookup_ip(cached_addrs_value2.host.as_str()).await {
                             Err(ex) => {
-                                warn!("async resolve from {} is failed, {}", cached_addrs_value2.host, ex.to_string());
+                                warn!(target: get_common_log_target(), "async resolve from {} is failed, {}", cached_addrs_value2.host, ex.to_string());
                                 cached_addrs_value.store(Arc::new(DnsCacheItem {
                                     host: cached_addrs_value2.host.clone(),
                                     addrs: cached_addrs_value2.addrs.clone(),
@@ -116,7 +115,7 @@ impl InternalDnsResolver {
                                 }
 
                                 if addrs.len() == 0 {
-                                    warn!("async resolve from {} is empty", cached_addrs_value2.host);
+                                    warn!(target: get_common_log_target(), "async resolve from {} is empty", cached_addrs_value2.host);
                                     cached_addrs_value.store(Arc::new(DnsCacheItem {
                                         host: cached_addrs_value2.host.clone(),
                                         addrs: cached_addrs_value2.addrs.clone(),

@@ -26,7 +26,7 @@ use crate::asynchronous::paginator::PaginatorAPI;
 use crate::asynchronous::reader::StreamVec;
 use crate::auth::{pre_signed_policy_url, pre_signed_post_signature, pre_signed_url, sign_header, PreSignedPolicyURLInput, PreSignedPolicyURLOutput, PreSignedPostSignatureInput, PreSignedPostSignatureOutput, PreSignedURLInput, PreSignedURLOutput};
 use crate::bucket::{CreateBucketInput, CreateBucketOutput, DeleteBucketCORSInput, DeleteBucketCORSOutput, DeleteBucketCustomDomainInput, DeleteBucketCustomDomainOutput, DeleteBucketEncryptionInput, DeleteBucketEncryptionOutput, DeleteBucketInput, DeleteBucketInventoryInput, DeleteBucketInventoryOutput, DeleteBucketLifecycleInput, DeleteBucketLifecycleOutput, DeleteBucketMirrorBackInput, DeleteBucketMirrorBackOutput, DeleteBucketOutput, DeleteBucketPolicyInput, DeleteBucketPolicyOutput, DeleteBucketRealTimeLogInput, DeleteBucketRealTimeLogOutput, DeleteBucketRenameInput, DeleteBucketRenameOutput, DeleteBucketReplicationInput, DeleteBucketReplicationOutput, DeleteBucketTaggingInput, DeleteBucketTaggingOutput, DeleteBucketWebsiteInput, DeleteBucketWebsiteOutput, DoesBucketExistInput, GetBucketACLInput, GetBucketACLOutput, GetBucketAccessMonitorInput, GetBucketAccessMonitorOutput, GetBucketCORSInput, GetBucketCORSOutput, GetBucketEncryptionInput, GetBucketEncryptionOutput, GetBucketInfoInput, GetBucketInfoOutput, GetBucketInventoryInput, GetBucketInventoryOutput, GetBucketLifecycleInput, GetBucketLifecycleOutput, GetBucketLocationInput, GetBucketLocationOutput, GetBucketMirrorBackInput, GetBucketMirrorBackOutput, GetBucketNotificationType2Input, GetBucketNotificationType2Output, GetBucketPolicyInput, GetBucketPolicyOutput, GetBucketRealTimeLogInput, GetBucketRealTimeLogOutput, GetBucketRenameInput, GetBucketRenameOutput, GetBucketReplicationInput, GetBucketReplicationOutput, GetBucketTaggingInput, GetBucketTaggingOutput, GetBucketTrashInput, GetBucketTrashOutput, GetBucketTypeInput, GetBucketTypeOutput, GetBucketVersioningInput, GetBucketVersioningOutput, GetBucketWebsiteInput, GetBucketWebsiteOutput, HeadBucketInput, HeadBucketOutput, ListBucketCustomDomainInput, ListBucketCustomDomainOutput, ListBucketInventoryInput, ListBucketInventoryOutput, ListBucketsInput, ListBucketsOutput, PutBucketACLInput, PutBucketACLOutput, PutBucketAccessMonitorInput, PutBucketAccessMonitorOutput, PutBucketCORSInput, PutBucketCORSOutput, PutBucketCustomDomainInput, PutBucketCustomDomainOutput, PutBucketEncryptionInput, PutBucketEncryptionOutput, PutBucketInventoryInput, PutBucketInventoryOutput, PutBucketLifecycleInput, PutBucketLifecycleOutput, PutBucketMirrorBackInput, PutBucketMirrorBackOutput, PutBucketNotificationType2Input, PutBucketNotificationType2Output, PutBucketPolicyInput, PutBucketPolicyOutput, PutBucketRealTimeLogInput, PutBucketRealTimeLogOutput, PutBucketRenameInput, PutBucketRenameOutput, PutBucketReplicationInput, PutBucketReplicationOutput, PutBucketStorageClassInput, PutBucketStorageClassOutput, PutBucketTaggingInput, PutBucketTaggingOutput, PutBucketTrashInput, PutBucketTrashOutput, PutBucketVersioningInput, PutBucketVersioningOutput, PutBucketWebsiteInput, PutBucketWebsiteOutput};
-use crate::common::{GenericInput, RequestInfoTrait};
+use crate::common::{get_common_log_target, GenericInput, RequestInfoTrait};
 use crate::config::ConfigHolder;
 use crate::constant::{ALL_UPLOAD_OPERATIONS, BASE_DELAY_MS, CREDENTIALS_EXPIRES, DEFAULT_MAX_KEYS, GET_OBJECT_TO_FILE_OPERATION, HEADER_CONTENT_LENGTH, HEADER_CONTENT_LENGTH_LOWER, HEADER_EXPECT, HEADER_SDK_RETRY_COUNT, MAX_DELAY_MS, SCHEMA_HTTP, SCHEMA_HTTPS};
 use crate::control::{DeleteQosPolicyInput, DeleteQosPolicyOutput, GetQosPolicyInput, GetQosPolicyOutput, PutQosPolicyInput, PutQosPolicyOutput};
@@ -133,9 +133,9 @@ where
 
                 let (domain, schema, _) = self.config_holder.parse_domain(proxy_url.as_str())?;
                 if self.config_holder.proxy_username != "" && self.config_holder.proxy_password != "" {
-                    proxy_url = format!("{}//{}:{}@{}", schema, self.config_holder.proxy_username, self.config_holder.proxy_password, domain);
+                    proxy_url = format!("{}://{}:{}@{}", schema, self.config_holder.proxy_username, self.config_holder.proxy_password, domain);
                 } else {
-                    proxy_url = format!("{}//{}", schema, domain);
+                    proxy_url = format!("{}://{}", schema, domain);
                 }
                 match Proxy::http(proxy_url.as_str()) {
                     Err(e) => return Err(TosError::client_error_with_cause("build http proxy error", GenericError::DefaultError(e.to_string()))),
@@ -359,8 +359,8 @@ where
         self.config_holder.proxy_host = proxy_host.into();
         self
     }
-    pub fn proxy_port(mut self, proxy_host: isize) -> Self {
-        self.config_holder.proxy_port = proxy_host.into();
+    pub fn proxy_port(mut self, proxy_port: isize) -> Self {
+        self.config_holder.proxy_port = proxy_port.into();
         self
     }
     pub fn proxy_username(mut self, proxy_username: impl Into<String>) -> Self {
@@ -495,9 +495,8 @@ where
                     return;
                 }
             }
-
             match credentials_provider.credentials(CREDENTIALS_EXPIRES).await {
-                Err(ex) => warn!("async load credentials error, {}", ex),
+                Err(ex) => warn!(target: get_common_log_target(), "async load credentials error, {}", ex),
                 Ok(c) => {
                     let mut inner_credentials = inner_credentials.write().await;
                     *inner_credentials = Some(c.clone());
@@ -1458,9 +1457,9 @@ where
             match result {
                 Ok(k) => {
                     if exceed {
-                        warn!("high latency request {} succeed, http status: {}, request id: {}, cost: {} ms", operation, k.status_code(), k.request_id(), elapsed_ms)
+                        warn!(target: get_common_log_target(), "high latency request {} succeed, http status: {}, request id: {}, cost: {} ms", operation, k.status_code(), k.request_id(), elapsed_ms)
                     } else {
-                        info!("do {} succeed, http status: {}, request id: {}, cost: {} ms", operation, k.status_code(), k.request_id(), elapsed_ms);
+                        info!(target: get_common_log_target(), "do {} succeed, http status: {}, request id: {}, cost: {} ms", operation, k.status_code(), k.request_id(), elapsed_ms);
                     }
                     return Ok(k);
                 }
@@ -1468,26 +1467,26 @@ where
                     match &e {
                         TosError::TosClientError { .. } => {
                             if exceed {
-                                warn!("high latency request {} failed, cost: {} ms", operation, elapsed_ms);
+                                warn!(target: get_common_log_target(), "high latency request {} failed, cost: {} ms", operation, elapsed_ms);
                             } else {
-                                warn!("do {} failed, cost: {} ms", operation, elapsed_ms);
+                                warn!(target: get_common_log_target(), "do {} failed, cost: {} ms", operation, elapsed_ms);
                             }
                         }
                         TosError::TosServerError { status_code, request_id, ec, .. } => {
                             if exceed {
                                 if status_code.to_owned() < 500 {
-                                    warn!("high latency request {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
+                                    warn!(target: get_common_log_target(), "high latency request {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
                                     request_id, ec, elapsed_ms);
                                 } else {
-                                    warn!("high latency request {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
+                                    warn!(target: get_common_log_target(), "high latency request {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
                                     request_id, ec, elapsed_ms);
                                 }
                             } else {
                                 if status_code.to_owned() < 500 {
-                                    warn!("do {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
+                                    warn!(target: get_common_log_target(), "do {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
                                     request_id, ec, elapsed_ms);
                                 } else {
-                                    info!("do {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
+                                    info!(target: get_common_log_target(), "do {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
                                     request_id, ec, elapsed_ms);
                                 }
                             }
@@ -1688,7 +1687,7 @@ where
     async fn check_object_status(&self, bucket: &str, key: &str, offset: i64, content_length: i64, ginput: &GenericInput) -> Result<(String, bool), TosError> {
         let mut if_match = String::new();
         let mut forbid_overwrite = false;
-        if offset <= 0 && content_length > 0 {
+        if offset <= 0 && content_length >= 0 {
             let mut hinput = HeadObjectInput::new(bucket, key);
             hinput.set_request_host(ginput.request_host.as_str());
             if let Some(request_date) = ginput.request_date {

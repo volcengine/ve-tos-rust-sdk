@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 use crate::enumeration::{CannedType, GranteeType, PermissionType};
+use crate::log::DualRollingConfig;
 use chrono::{DateTime, Utc};
+use once_cell::sync::OnceCell;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -24,21 +26,105 @@ use std::sync::mpsc::Sender;
 use std::sync::Mutex;
 use std::time::Duration;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer, Registry};
+
+static COMMON_LOG_TARGET: OnceCell<String> = OnceCell::new();
+
+pub(crate) fn get_common_log_target() -> &'static str {
+    if let Some(target) = COMMON_LOG_TARGET.get() {
+        return target.as_str();
+    }
+    "common"
+}
 
 pub fn init_tracing_log(directives: impl AsRef<str>, directory: impl AsRef<Path>,
                         file_name_prefix: impl AsRef<Path>) -> WorkerGuard {
     let file_appender = tracing_appender::rolling::daily(directory, file_name_prefix);
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    tracing_subscriber::fmt()
-        .with_line_number(true)
-        .with_target(true)
-        .with_thread_ids(true)
-        .with_writer(non_blocking)
-        .with_env_filter(EnvFilter::new(directives))
-        .with_ansi(false).init();
+    let mut directives = directives.as_ref();
+    if !directives.contains("=") {
+        COMMON_LOG_TARGET.get_or_init(move || {
+            String::from("common")
+        });
+        tracing_subscriber::fmt()
+            .with_line_number(true)
+            .with_target(true)
+            .with_thread_ids(true)
+            .with_writer(non_blocking)
+            .with_env_filter(EnvFilter::new(format!("common={}", directives)))
+            .with_ansi(false).init();
+    } else {
+        directives.splitn(2, '=').take(1).for_each(|x| {
+            COMMON_LOG_TARGET.get_or_init(move || {
+                x.to_string()
+            });
+        });
+        tracing_subscriber::fmt()
+            .with_line_number(true)
+            .with_target(true)
+            .with_thread_ids(true)
+            .with_writer(non_blocking)
+            .with_env_filter(EnvFilter::new(directives))
+            .with_ansi(false).init();
+    }
     guard
+}
+
+pub fn init_tracing_logs(common_log: impl Into<(String, String)>, other_logs: impl Iterator<Item=(String, String)>, directory: impl AsRef<Path>,
+                         max_file_size: usize, rotate_daily: bool, max_file_number: usize) -> Vec<WorkerGuard> {
+    let mut log_pairs = Vec::with_capacity(8);
+    let (mut name, mut level) = common_log.into();
+    if name.is_empty() {
+        name = String::from("common");
+    }
+
+    let common_log_target = name.clone();
+    COMMON_LOG_TARGET.get_or_init(move || {
+        common_log_target
+    });
+
+    if level.is_empty() {
+        level = String::from("warn");
+    }
+
+    log_pairs.push((name, level));
+    for (name, level) in other_logs {
+        if name.is_empty() || level.is_empty() {
+            continue;
+        }
+        log_pairs.push((name, level));
+    }
+
+    let mut guards = Vec::with_capacity(log_pairs.len());
+    let mut layers: Vec<Box<dyn Layer<Registry> + Send + Sync>> = Vec::with_capacity(log_pairs.len());
+    for (name, level) in log_pairs {
+        let writer = DualRollingConfig::new(directory.as_ref(), name.as_str())
+            .max_file_size(max_file_size)
+            .rotate_daily(rotate_daily)
+            .max_file_number(max_file_number)
+            .build().unwrap();
+
+        let (non_blocking, guard) = tracing_appender::non_blocking(writer);
+        // 依赖 impl<S, L, F> Layer<S> for Filtered<L, F, S>
+        let layer = tracing_subscriber::fmt::layer()
+            .with_target(true)
+            .with_ansi(false)
+            .with_file(true)
+            .with_line_number(true)
+            .with_writer(non_blocking)
+            .with_filter(EnvFilter::new(format!("{}={}", name, level)));
+
+        layers.push(Box::new(layer));
+        guards.push(guard);
+    }
+
+    tracing_subscriber::registry()
+        .with(layers)
+        .init();
+    guards
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

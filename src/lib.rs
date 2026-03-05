@@ -36,6 +36,7 @@ mod internal;
 pub mod asynchronous;
 pub mod paginator;
 pub mod control;
+mod log;
 
 
 

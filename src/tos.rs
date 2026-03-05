@@ -19,7 +19,7 @@ use super::credential::{CommonCredentials, CommonCredentialsProvider, Credential
 use super::error::{ErrorResponse, GenericError, TosError};
 use super::internal::{auto_recognize_content_type, build_certificate, build_identity, check_bucket_and_key, check_need_retry, exceed_high_latency_log_threshold, get_request_url, parse_json, sleep_for_retry, trans_header_value, AdditionalContext, InputTranslator, OutputParser};
 use crate::auth::{pre_signed_policy_url, pre_signed_post_signature, pre_signed_url, sign_header, PreSignedPolicyURLInput, PreSignedPolicyURLOutput, PreSignedPostSignatureInput, PreSignedPostSignatureOutput, PreSignedURLInput, PreSignedURLOutput, SignerAPI};
-use crate::common::{Meta, RequestInfo, RequestInfoTrait};
+use crate::common::{get_common_log_target, Meta, RequestInfo, RequestInfoTrait};
 use crate::constant::*;
 use crate::enumeration::HttpMethodType::HttpMethodHead;
 use crate::http::{HttpRequest, HttpResponse, RequestContext};
@@ -98,9 +98,9 @@ where
 
                 let (domain, schema, _) = self.config_holder.parse_domain(proxy_url.as_str())?;
                 if self.config_holder.proxy_username != "" && self.config_holder.proxy_password != "" {
-                    proxy_url = format!("{}//{}:{}@{}", schema, self.config_holder.proxy_username, self.config_holder.proxy_password, domain);
+                    proxy_url = format!("{}://{}:{}@{}", schema, self.config_holder.proxy_username, self.config_holder.proxy_password, domain);
                 } else {
-                    proxy_url = format!("{}//{}", schema, domain);
+                    proxy_url = format!("{}://{}", schema, domain);
                 }
                 match Proxy::http(proxy_url.as_str()) {
                     Err(e) => return Err(TosError::client_error_with_cause("build http proxy error", GenericError::DefaultError(e.to_string()))),
@@ -670,9 +670,9 @@ where
             match result {
                 Ok(k) => {
                     if exceed {
-                        warn!("high latency request {} succeed, http status: {}, request id: {}, cost: {} ms", operation, k.status_code(), k.request_id(), elapsed_ms);
+                        warn!(target: get_common_log_target(), "high latency request {} succeed, http status: {}, request id: {}, cost: {} ms", operation, k.status_code(), k.request_id(), elapsed_ms);
                     } else {
-                        info!("do {} succeed, http status: {}, request id: {}, cost: {} ms", operation, k.status_code(), k.request_id(), elapsed_ms);
+                        info!(target: get_common_log_target(), "do {} succeed, http status: {}, request id: {}, cost: {} ms", operation, k.status_code(), k.request_id(), elapsed_ms);
                     }
                     return Ok(k);
                 }
@@ -680,26 +680,26 @@ where
                     match &e {
                         TosError::TosClientError { .. } => {
                             if exceed {
-                                warn!("high latency request {} failed, cost: {} ms", operation, elapsed_ms);
+                                warn!(target: get_common_log_target(), "high latency request {} failed, cost: {} ms", operation, elapsed_ms);
                             } else {
-                                warn!("do {} failed, cost: {} ms", operation, elapsed_ms);
+                                warn!(target: get_common_log_target(), "do {} failed, cost: {} ms", operation, elapsed_ms);
                             }
                         }
                         TosError::TosServerError { status_code, request_id, ec, .. } => {
                             if exceed {
                                 if status_code.to_owned() < 500 {
-                                    warn!("high latency request {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
+                                    warn!(target: get_common_log_target(), "high latency request {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
                                     request_id, ec, elapsed_ms);
                                 } else {
-                                    warn!("high latency request {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
+                                    warn!(target: get_common_log_target(), "high latency request {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
                                     request_id, ec, elapsed_ms);
                                 }
                             } else {
                                 if status_code.to_owned() < 500 {
-                                    warn!("do {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
+                                    warn!(target: get_common_log_target(), "do {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
                                     request_id, ec, elapsed_ms);
                                 } else {
-                                    info!("do {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
+                                    info!(target: get_common_log_target(), "do {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
                                     request_id, ec, elapsed_ms);
                                 }
                             }
