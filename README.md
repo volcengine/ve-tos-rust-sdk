@@ -1,5 +1,11 @@
 # Volcengine Object Storage(TOS) Rust SDK
 
+## Security and privacy
+This project takes security seriously.
+For vulnerability reporting and supported versions, see [SECURITY.md](SECURITY.md)
+
+## Examples
+
 ```rust
 use async_trait::async_trait;
 use futures_core::future::BoxFuture;
