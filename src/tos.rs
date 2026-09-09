@@ -622,6 +622,7 @@ where
             client_crt: c.client_crt.clone(),
             client_key: c.client_key.clone(),
             ca_crt: c.ca_crt.clone(),
+            async_file_upload_reader_mode: c.async_file_upload_reader_mode,
             user_agent: c.user_agent.clone(),
             region: "".to_string(),
             schema: "".to_string(),
@@ -658,7 +659,15 @@ where
         B: Read + Send + 'static,
     {
         let config_holder = self.config_holder.load();
-        let operation = check_bucket_and_key(input, config_holder.is_custom_domain)?;
+        let (operation, bucket, key) = check_bucket_and_key(input, config_holder.is_custom_domain)?;
+        let log_message;
+        if bucket.is_empty() {
+            log_message = operation.to_string();
+        } else if key.is_empty() {
+            log_message = format!("{} for bucket {}", operation, bucket);
+        } else {
+            log_message = format!("{} for bucket {} and key {}", operation, bucket, key);
+        }
         let mut retry_count = 0;
         let max_retry_count = config_holder.max_retry_count;
         loop {
@@ -670,9 +679,9 @@ where
             match result {
                 Ok(k) => {
                     if exceed {
-                        warn!(target: get_common_log_target(), "high latency request {} succeed, http status: {}, request id: {}, cost: {} ms", operation, k.status_code(), k.request_id(), elapsed_ms);
+                        warn!(target: get_common_log_target(), "high latency request {} succeed, http status: {}, request id: {}, cost: {} ms", log_message, k.status_code(), k.request_id(), elapsed_ms);
                     } else {
-                        info!(target: get_common_log_target(), "do {} succeed, http status: {}, request id: {}, cost: {} ms", operation, k.status_code(), k.request_id(), elapsed_ms);
+                        info!(target: get_common_log_target(), "do {} succeed, http status: {}, request id: {}, cost: {} ms", log_message, k.status_code(), k.request_id(), elapsed_ms);
                     }
                     return Ok(k);
                 }
@@ -680,26 +689,26 @@ where
                     match &e {
                         TosError::TosClientError { .. } => {
                             if exceed {
-                                warn!(target: get_common_log_target(), "high latency request {} failed, cost: {} ms", operation, elapsed_ms);
+                                warn!(target: get_common_log_target(), "high latency request {} failed, cost: {} ms", log_message, elapsed_ms);
                             } else {
-                                warn!(target: get_common_log_target(), "do {} failed, cost: {} ms", operation, elapsed_ms);
+                                warn!(target: get_common_log_target(), "do {} failed, cost: {} ms", log_message, elapsed_ms);
                             }
                         }
                         TosError::TosServerError { status_code, request_id, ec, .. } => {
                             if exceed {
                                 if status_code.to_owned() < 500 {
-                                    warn!(target: get_common_log_target(), "high latency request {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
+                                    warn!(target: get_common_log_target(), "high latency request {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", log_message, status_code,
                                     request_id, ec, elapsed_ms);
                                 } else {
-                                    warn!(target: get_common_log_target(), "high latency request {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
+                                    warn!(target: get_common_log_target(), "high latency request {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", log_message, status_code,
                                     request_id, ec, elapsed_ms);
                                 }
                             } else {
                                 if status_code.to_owned() < 500 {
-                                    warn!(target: get_common_log_target(), "do {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
+                                    warn!(target: get_common_log_target(), "do {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", log_message, status_code,
                                     request_id, ec, elapsed_ms);
                                 } else {
-                                    info!(target: get_common_log_target(), "do {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", operation, status_code,
+                                    info!(target: get_common_log_target(), "do {} finished, http status: {}, request id: {}, ec: {}, cost: {} ms", log_message, status_code,
                                     request_id, ec, elapsed_ms);
                                 }
                             }

@@ -38,5 +38,5 @@ pub mod paginator;
 pub mod control;
 mod log;
 
-
-
+#[cfg(test)]
+mod conditional_request_tests;

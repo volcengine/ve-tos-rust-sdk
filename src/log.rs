@@ -171,7 +171,7 @@ impl DualRollingWriter {
     }
 
     fn rotate(&mut self, incoming_bytes: usize) -> std::io::Result<()> {
-        let now = Utc::now().format(FILE_DATE_FORMAT).to_string();;
+        let now = Utc::now().format(FILE_DATE_FORMAT).to_string();
         let mut need_rotate = false;
         if self.config.rotate_daily && self.current_date != now {
             self.current_date = now;

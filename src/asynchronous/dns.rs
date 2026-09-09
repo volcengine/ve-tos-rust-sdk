@@ -21,6 +21,7 @@ use arc_swap::ArcSwap;
 use async_channel::Receiver;
 use chrono::{DateTime, Utc};
 use futures_core::future::BoxFuture;
+use hickory_resolver::config::LookupIpStrategy;
 use hickory_resolver::lookup_ip::LookupIp;
 use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::{ResolveError, Resolver};
@@ -54,12 +55,21 @@ pub(crate) struct InternalDnsResolver {
 }
 
 impl InternalDnsResolver {
-    pub(crate) fn new<S>(dns_cache_time: isize, dns_cache_async_refresh: bool, port: isize, async_runtime: Arc<S>, closed: Arc<AtomicI8>, receiver: Receiver<()>) -> (Self, Option<BoxFuture<'static, Result<(), S::JoinError>>>)
+    pub(crate) fn new<S>(
+        dns_cache_time: isize,
+        dns_cache_async_refresh: bool,
+        port: isize,
+        async_runtime: Arc<S>,
+        closed: Arc<AtomicI8>,
+        receiver: Receiver<()>,
+    ) -> (Self, Option<BoxFuture<'static, Result<(), S::JoinError>>>)
     where
         S: AsyncRuntime + Send + Sync + 'static,
     {
         let cached_addrs = Arc::new(RwLock::new(HashMap::<String, DnsCache>::new()));
-        let resolver = Arc::new(Resolver::builder_tokio().unwrap().build());
+        let mut resolver = Resolver::builder_tokio().unwrap();
+        resolver.options_mut().ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
+        let resolver = Arc::new(resolver.build());
 
         let async_runtime2 = async_runtime.clone();
         let cached_addrs2 = cached_addrs.clone();
@@ -142,17 +152,19 @@ impl InternalDnsResolver {
                 }
             }));
         }
-        (Self {
-            dns_cache_time,
-            port,
-            resolver,
-            cached_addrs,
-        }, handler)
+        (
+            Self {
+                dns_cache_time,
+                port,
+                resolver,
+                cached_addrs,
+            },
+            handler,
+        )
     }
 }
 
-impl Resolve for InternalDnsResolver
-{
+impl Resolve for InternalDnsResolver {
     fn resolve(&self, name: hyper::client::connect::dns::Name) -> Resolving {
         let resolver = self.resolver.clone();
         let port = self.port as u16;
@@ -164,9 +176,12 @@ impl Resolve for InternalDnsResolver
                 let cached_addrs = cached_addrs.read().await;
                 if let Some(dns_cache) = cached_addrs.get(name.as_str()) {
                     let dns_cache = dns_cache.load();
-                    if dns_cache.addrs.len() > 0 && (dns_cache.ddl >= Utc::now() || dns_cache.immortal) {
+                    if dns_cache.addrs.len() > 0
+                        && (dns_cache.ddl >= Utc::now() || dns_cache.immortal)
+                    {
                         // println!("{}", "return cached addr");
-                        let addrs = Box::new(shuffle(dns_cache.addrs.clone())) as Box<dyn Iterator<Item=SocketAddr> + Send>;
+                        let addrs = Box::new(shuffle(dns_cache.addrs.clone()))
+                            as Box<dyn Iterator<Item = SocketAddr> + Send>;
                         return Ok(addrs);
                     }
                 }
@@ -175,53 +190,78 @@ impl Resolve for InternalDnsResolver
             let cached_addrs = cached_addrs.write().await;
             if let Some(dns_cache) = cached_addrs.get(name.as_str()) {
                 let dns_cache = dns_cache.load();
-                if dns_cache.addrs.len() > 0 && (dns_cache.ddl >= Utc::now() || dns_cache.immortal) {
+                if dns_cache.addrs.len() > 0 && (dns_cache.ddl >= Utc::now() || dns_cache.immortal)
+                {
                     // println!("{}", "return cached addr");
-                    let addrs = Box::new(shuffle(dns_cache.addrs.clone())) as Box<dyn Iterator<Item=SocketAddr> + Send>;
+                    let addrs = Box::new(shuffle(dns_cache.addrs.clone()))
+                        as Box<dyn Iterator<Item = SocketAddr> + Send>;
                     return Ok(addrs);
                 }
             }
-            trans(resolver.lookup_ip(name.as_str()).await, port, name, dns_cache_time, cached_addrs)
+            trans(
+                resolver.lookup_ip(name.as_str()).await,
+                port,
+                name,
+                dns_cache_time,
+                cached_addrs,
+            )
         })
     }
 }
 
-pub(crate) fn shuffle(mut addrs: Vec<SocketAddr>) -> impl Iterator<Item=SocketAddr> {
+pub(crate) fn shuffle(mut addrs: Vec<SocketAddr>) -> impl Iterator<Item = SocketAddr> {
     addrs.shuffle(&mut thread_rng());
     addrs.into_iter()
 }
 
 pub(crate) type BoxError = Box<dyn StdError + Send + Sync>;
 
-pub(crate) fn trans(result: Result<LookupIp, ResolveError>, port: u16, name: hyper::client::connect::dns::Name,
-                    dns_cache_time: isize, mut cached_addrs: RwLockWriteGuard<HashMap<String, DnsCache>>) -> Result<Addrs, BoxError> {
+pub(crate) fn trans(
+    result: Result<LookupIp, ResolveError>,
+    port: u16,
+    name: hyper::client::connect::dns::Name,
+    dns_cache_time: isize,
+    mut cached_addrs: RwLockWriteGuard<HashMap<String, DnsCache>>,
+) -> Result<Addrs, BoxError> {
     match result {
-        Err(ex) => Err(Box::new(TosError::client_error(format!("resolve from {} is failed, {}", name, ex.to_string()))) as Box<dyn StdError + Send + Sync>),
+        Err(ex) => Err(Box::new(TosError::client_error(format!(
+            "resolve from {} is failed, {}",
+            name,
+            ex.to_string()
+        ))) as Box<dyn StdError + Send + Sync>),
         Ok(ips) => {
             let mut addrs = Vec::<SocketAddr>::with_capacity(10);
             for ip in ips.iter() {
                 match ip {
                     IpAddr::V4(ipv4) => addrs.push(SocketAddr::V4(SocketAddrV4::new(ipv4, port))),
-                    IpAddr::V6(ipv6) => addrs.push(SocketAddr::V6(SocketAddrV6::new(ipv6, port, 0, 0)))
+                    IpAddr::V6(ipv6) => {
+                        addrs.push(SocketAddr::V6(SocketAddrV6::new(ipv6, port, 0, 0)))
+                    }
                 }
             }
 
             if addrs.len() == 0 {
-                let ex = Box::new(TosError::client_error(format!("resolve from {} is empty", name))) as Box<dyn StdError + Send + Sync>;
+                let ex = Box::new(TosError::client_error(format!(
+                    "resolve from {} is empty",
+                    name
+                ))) as Box<dyn StdError + Send + Sync>;
                 return Err(ex);
             }
 
             let mut rng = thread_rng();
             let dns_cache_time = dns_cache_time + rng.gen_range(0..5) as isize;
             let now = Utc::now();
-            cached_addrs.insert(name.to_string(), Arc::new(ArcSwap::new(Arc::new(DnsCacheItem {
-                host: name.to_string(),
-                addrs: addrs.clone(),
-                ddl: now.add(Duration::from_secs((dns_cache_time * 60) as u64)),
-                immortal: false,
-                last_update_at: now,
-            }))));
-            Ok(Box::new(addrs.into_iter()) as Box<dyn Iterator<Item=SocketAddr> + Send>)
+            cached_addrs.insert(
+                name.to_string(),
+                Arc::new(ArcSwap::new(Arc::new(DnsCacheItem {
+                    host: name.to_string(),
+                    addrs: addrs.clone(),
+                    ddl: now.add(Duration::from_secs((dns_cache_time * 60) as u64)),
+                    immortal: false,
+                    last_update_at: now,
+                }))),
+            );
+            Ok(Box::new(addrs.into_iter()) as Box<dyn Iterator<Item = SocketAddr> + Send>)
         }
     }
 }

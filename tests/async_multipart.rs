@@ -121,6 +121,16 @@ async fn test_multipart_upload(context: &AsyncContext) {
         assert!(o.request_id().len() > 0);
         println!("upload part etag1 done, {}", o.etag());
         etags.push(o.etag().to_string());
+
+        // let mut input = GetObjectInput::new(bucket, key);
+        // input.set_upload_id(upload_id);
+        // input.set_part_number(1);
+        // let mut o = client.get_object(&input).await.unwrap();
+        // assert!(o.request_id().len() > 0);
+        // let target_part_md5 = base64_md5(read_to_buf(o.content().unwrap()).await);
+        // let fd = File::open(big_file_path).await.unwrap();
+        // let source_part_md5 = base64_md5(read_to_buf_size(&mut ReaderStream::new(fd), first_part_size as usize).await);
+        // assert_eq!(source_part_md5, target_part_md5);
     }
     {
         let mut input = UploadPartInput::<ReaderStream<File>>::new(bucket, key, upload_id);
@@ -133,6 +143,18 @@ async fn test_multipart_upload(context: &AsyncContext) {
         assert!(o.request_id().len() > 0);
         println!("upload part etag2 done, {}", o.etag());
         etags.push(o.etag().to_string());
+
+
+        // let mut input = GetObjectInput::new(bucket, key);
+        // input.set_upload_id(upload_id);
+        // input.set_part_number(2);
+        // let mut o = client.get_object(&input).await.unwrap();
+        // assert!(o.request_id().len() > 0);
+        // let target_part_md5 = base64_md5(read_to_buf(o.content().unwrap()).await);
+        // let mut fd = File::open(big_file_path).await.unwrap();
+        // fd.seek(SeekFrom::Start(first_part_size as u64)).await.unwrap();
+        // let source_part_md5 = base64_md5(read_to_buf(&mut ReaderStream::new(fd)).await);
+        // assert_eq!(source_part_md5, target_part_md5);
     }
 
     let o = client.list_parts(&ListPartsInput::new(bucket, key, upload_id)).await.unwrap();

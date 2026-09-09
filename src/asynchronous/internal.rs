@@ -116,6 +116,13 @@ pub(crate) async fn read_response(response: HttpResponse) -> Result<Vec<u8>, Tos
             }
         }
         Some(x) => {
+            // [Review Fix #2] Check Content-Length before allocation to avoid oversized Vec reserve.
+            if x > MAX_READ_BUFFER_SIZE_FOR_JSON as u64 {
+                return Err(TosError::client_error(format!(
+                    "response body too large: {} bytes, max allowed: {} bytes",
+                    x, MAX_READ_BUFFER_SIZE_FOR_JSON
+                )));
+            }
             buf = Vec::with_capacity(x as usize);
             // wrap with reader length check
             let mut readable = InternalReader::sized(response.bytes_stream(), x as usize);
@@ -142,5 +149,4 @@ where
     let buf = read_response(response).await?;
     parse_json_by_buf(buf.as_slice())
 }
-
 

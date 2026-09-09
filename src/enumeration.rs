@@ -19,6 +19,20 @@ use serde::{Deserialize, Serialize};
 
 use ve_tos_generic::FromRefAndDisplay;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsyncFileUploadReaderMode {
+    /// Use `tokio::fs::File` with `ReaderStream` for async file uploads.
+    TokioFile,
+    /// Use `std::fs::File` in `spawn_blocking` tasks for async file uploads.
+    StdFile,
+}
+
+impl Default for AsyncFileUploadReaderMode {
+    fn default() -> Self {
+        Self::TokioFile
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, FromRefAndDisplay, Deserialize)]
 pub enum ACLType {
     #[default]
@@ -37,7 +51,6 @@ pub enum ACLType {
     #[serde(rename = "bucket-owner-entrusted")]
     ACLBucketOwnerEntrusted,
 }
-
 
 impl ACLType {
     pub fn as_str(&self) -> &str {
@@ -211,7 +224,6 @@ pub enum StorageClassType {
     StorageClassDeepColdArchive,
 }
 
-
 impl StorageClassType {
     pub fn as_str(&self) -> &str {
         match self {
@@ -305,7 +317,6 @@ impl BucketType {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Default, FromRefAndDisplay)]
 pub enum MetadataDirectiveType {
     #[default]
@@ -323,7 +334,6 @@ impl MetadataDirectiveType {
         }
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Default, FromRefAndDisplay)]
 pub enum TaggingDirectiveType {
@@ -359,7 +369,6 @@ impl GranteeType {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Default, FromRefAndDisplay, Deserialize, Serialize)]
 pub enum CannedType {
     #[default]
@@ -377,7 +386,6 @@ impl CannedType {
         }
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Default, FromRefAndDisplay, Deserialize, Serialize)]
 pub enum PermissionType {
@@ -409,7 +417,6 @@ impl PermissionType {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Default, FromRefAndDisplay)]
 pub enum ReplicationStatusType {
     #[default]
@@ -440,7 +447,6 @@ impl ReplicationStatusType {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Default, FromRefAndDisplay, Serialize, Deserialize)]
 pub enum TierType {
     #[default]
@@ -470,7 +476,6 @@ impl TierType {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Default, FromRefAndDisplay)]
 pub enum HttpMethodType {
     #[default]
@@ -480,7 +485,6 @@ pub enum HttpMethodType {
     HttpMethodDelete,
     HttpMethodHead,
 }
-
 
 impl HttpMethodType {
     pub fn as_str(&self) -> &str {
@@ -550,13 +554,13 @@ impl DocPreviewDstType {
 #[derive(Debug, Clone, PartialEq, Default, FromRefAndDisplay)]
 pub enum ObjectLockModeType {
     #[default]
-    ObjectLockModeCompliance
+    ObjectLockModeCompliance,
 }
 
 impl ObjectLockModeType {
     pub fn as_str(&self) -> &str {
         match self {
-            Self::ObjectLockModeCompliance => "COMPLIANCE"
+            Self::ObjectLockModeCompliance => "COMPLIANCE",
         }
     }
 }
@@ -580,7 +584,7 @@ impl InventoryIncludedObjType {
 pub enum InventoryFormatType {
     #[default]
     #[serde(rename = "CSV")]
-    InventoryFormatCsv
+    InventoryFormatCsv,
 }
 
 impl InventoryFormatType {

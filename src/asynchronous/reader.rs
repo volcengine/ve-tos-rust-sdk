@@ -19,6 +19,7 @@ use crate::reader::{BuildBufferReader, InternalReader, MultiBytes, Multifunction
 use bytes::Bytes;
 use futures_core::Stream;
 use futures_util::StreamExt;
+use std::future::Future;
 use std::io::{Error, ErrorKind};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -63,6 +64,10 @@ where
 
         if let Some(result) = self.current_result.take() {
             return result;
+        }
+
+        if self.succeed_send {
+            return Poll::Ready(None);
         }
 
         if self.first_read {
@@ -187,6 +192,77 @@ impl Stream for MultiBytes {
     }
 }
 
+impl<B> MultifunctionalReader<B>
+where
+    B: Stream<Item=Result<Bytes, crate::error::CommonError>> + Unpin,
+{
+    #[cfg(feature = "tokio-runtime")]
+    fn wait_rate_limit(&mut self, duration: std::time::Duration, b: Bytes, read_end: bool, cx: &mut Context<'_>)
+                       -> Poll<Option<Result<Bytes, crate::error::CommonError>>> {
+        let mut future = Box::pin(async move {
+            tokio::time::sleep(duration).await;
+        });
+        // [Review Fix] 必须立即 poll sleep future 以向 timer 注册 waker，
+        // 否则在 current_thread runtime 中无人唤醒该 task，stream 将永久 Pending。
+        match future.as_mut().poll(cx) {
+            Poll::Ready(()) => {
+                // 定时器已过期（duration ≈ 0），直接重试 rate limit
+                return self.poll_ready_bytes(b, read_end, cx);
+            }
+            Poll::Pending => {
+                self.pending_bytes = Some(b);
+                self.pending_read_end = read_end;
+                self.inner.current_future = Some(future);
+                Poll::Pending
+            }
+        }
+    }
+
+    #[cfg(not(feature = "tokio-runtime"))]
+    fn wait_rate_limit(&mut self, _: std::time::Duration, _: Bytes, _: bool, _: &mut Context<'_>)
+                       -> Poll<Option<Result<Bytes, crate::error::CommonError>>> {
+        Poll::Ready(Some(Err(Error::new(
+            ErrorKind::Other,
+            "async rate limiter requires feature `tokio-runtime`",
+        ))))
+    }
+
+    fn poll_ready_bytes(&mut self, b: Bytes, read_end: bool, cx: &mut Context<'_>)
+                        -> Poll<Option<Result<Bytes, crate::error::CommonError>>> {
+        if let Some(ref rl) = self.inner.rate_limiter {
+            let (ok, dur) = rl.acquire(b.len() as i64);
+            if !ok {
+                // [Review Fix #1] 限制最大获取次数，防止因分块大于令牌桶容量导致无限等待
+                self.acquire_count += 1;
+                if self.acquire_count > 30 {
+                    let result = Poll::Ready(Some(Err(Error::new(ErrorKind::Other, "exceeded max acquire times"))));
+                    if !self.inner.async_send_data_transfer_status(DataTransferType::DataTransferFailed, -1, cx) {
+                        self.inner.current_result = Some(result);
+                        return Poll::Pending;
+                    }
+                    return result;
+                }
+                return self.wait_rate_limit(dur.unwrap(), b, read_end, cx);
+            }
+            self.acquire_count = 0;
+        }
+
+        if !self.inner.async_send_data_transfer_status(DataTransferType::DataTransferRW, b.len() as i64, cx) {
+            self.inner.current_result = Some(Poll::Ready(Some(Ok(b))));
+            return Poll::Pending;
+        }
+
+        if read_end && !self.inner.succeed_send {
+            self.inner.succeed_send = true;
+            if !self.inner.async_send_data_transfer_status(DataTransferType::DataTransferSucceed, -1, cx) {
+                self.inner.current_result = Some(Poll::Ready(Some(Ok(b))));
+                return Poll::Pending;
+            }
+        }
+        Poll::Ready(Some(Ok(b)))
+    }
+}
+
 
 impl<B> Stream for MultifunctionalReader<B>
 where
@@ -206,6 +282,16 @@ where
             return result;
         }
 
+        if let Some(b) = self.pending_bytes.take() {
+            let read_end = self.pending_read_end;
+            self.pending_read_end = false;
+            return self.poll_ready_bytes(b, read_end, cx);
+        }
+
+        if self.inner.succeed_send {
+            return Poll::Ready(None);
+        }
+
         if self.inner.first_read {
             self.inner.first_read = false;
             if !self.inner.async_send_data_transfer_status(DataTransferType::DataTransferStarted, -1, cx) {
@@ -218,6 +304,17 @@ where
             Poll::Ready(opt) => {
                 match opt {
                     None => {
+                        if let Some(total_size) = self.inner.total_size {
+                            if self.inner.read_size < total_size {
+                                let result = Poll::Ready(Some(Err(Error::new(ErrorKind::Other, format!("premature end, expected {}, actual {}", total_size, self.inner.read_size)))));
+                                if !self.inner.async_send_data_transfer_status(DataTransferType::DataTransferFailed, -1, cx) {
+                                    self.inner.current_result = Some(result);
+                                    return Poll::Pending;
+                                }
+                                return result;
+                            }
+                        }
+
                         if self.digest.is_some() {
                             if let Err(ex) = self.set_crc64() {
                                 return Poll::Ready(Some(Err(ex)));
@@ -241,15 +338,17 @@ where
                             return Poll::Ready(Some(result));
                         }
 
-                        let b = result.as_ref().unwrap().as_ref();
-                        self.inner.read_size += b.len();
+                        let mut b = result.unwrap();
                         if b.len() > 0 {
-                            if self.digest.is_some() {
-                                self.digest.as_mut().unwrap().write(b);
-                            }
-
                             let mut read_end = false;
                             if let Some(total_size) = self.inner.total_size {
+                                if self.inner.read_size + b.len() > total_size {
+                                    b.truncate(b.len() - (self.inner.read_size + b.len() - total_size));
+                                }
+                                self.inner.read_size += b.len();
+                                if self.digest.is_some() {
+                                    self.digest.as_mut().unwrap().write(b.as_ref());
+                                }
                                 if self.inner.read_size == total_size {
                                     if self.digest.is_some() {
                                         if let Err(ex) = self.set_crc64() {
@@ -258,22 +357,15 @@ where
                                     }
                                     read_end = true;
                                 }
-                            }
-
-                            if !self.inner.async_send_data_transfer_status(DataTransferType::DataTransferRW, b.len() as i64, cx) {
-                                self.inner.current_result = Some(Poll::Ready(Some(result)));
-                                return Poll::Pending;
-                            }
-
-                            if read_end && !self.inner.succeed_send {
-                                self.inner.succeed_send = true;
-                                if !self.inner.async_send_data_transfer_status(DataTransferType::DataTransferSucceed, -1, cx) {
-                                    self.inner.current_result = Some(Poll::Ready(Some(result)));
-                                    return Poll::Pending;
+                            } else {
+                                self.inner.read_size += b.len();
+                                if self.digest.is_some() {
+                                    self.digest.as_mut().unwrap().write(b.as_ref());
                                 }
                             }
+                            return self.poll_ready_bytes(b, read_end, cx);
                         }
-                        Poll::Ready(Some(result))
+                        Poll::Ready(Some(Ok(b)))
                     }
                 }
             }

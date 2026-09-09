@@ -18,9 +18,9 @@ use crate::bucket::is_non_positive;
 use crate::common::{DataTransferListener, DataTransferStatus, Grant, ListedCommonPrefix, Meta, Owner, RateLimiter, RequestInfo, RequestInfoTrait, TagSet, TempCopyResult};
 use crate::common::{GenericInput, UserMeta};
 use crate::config::ConfigHolder;
-use crate::constant::{DEFAULT_READ_BUFFER_SIZE, HEADER_CACHE_CONTROL, HEADER_CALLBACK, HEADER_CONTENT_DISPOSITION, HEADER_CONTENT_ENCODING, HEADER_CONTENT_LANGUAGE, HEADER_CONTENT_LENGTH, HEADER_CONTENT_MD5, HEADER_CONTENT_RANGE, HEADER_CONTENT_SHA256, HEADER_CONTENT_TYPE, HEADER_COPY_SOURCE_VERSION_ID, HEADER_DELETE_MARKER, HEADER_DIRECTORY, HEADER_ETAG, HEADER_EXPIRATION, HEADER_EXPIRES, HEADER_FETCH_DETECT_MIME_TYPE, HEADER_FORBID_OVERWRITE, HEADER_HASH_CRC64ECMA, HEADER_IF_NONE_MATCH, HEADER_LAST_MODIFIED, HEADER_LAST_MODIFIED_NS, HEADER_METADATA_DIRECTIVE, HEADER_MODIFY_TIMESTAMP, HEADER_MODIFY_TIMESTAMP_NS, HEADER_NEXT_APPEND_OFFSET, HEADER_NOTIFICATION_CUSTOM_PARAMETERS, HEADER_OBJECT_EXPIRES, HEADER_OBJECT_TYPE, HEADER_PREFIX_META, HEADER_RANGE, HEADER_RECURSIVE_MKDIR, HEADER_REPLICATION_STATUS, HEADER_RESTORE, HEADER_RESTORE_EXPIRY_DAYS, HEADER_RESTORE_REQUEST_DATE, HEADER_RESTORE_TIER, HEADER_SERVER_SIDE_ENCRYPTION, HEADER_SERVER_SIDE_ENCRYPTION_KMS_KEY_ID, HEADER_SSEC_ALGORITHM, HEADER_SSEC_KEY_MD5, HEADER_STORAGE_CLASS, HEADER_SYMLINK_BUCKET, HEADER_SYMLINK_TARGET, HEADER_SYMLINK_TARGET_SIZE, HEADER_TAGGING, HEADER_TAGGING_COUNT, HEADER_TAGGING_DIRECTIVE, HEADER_TRAFFIC_LIMIT, HEADER_VERSION_ID, HEADER_WEBSITE_REDIRECT_LOCATION, HEADER_X_IF_MATCH, QUERY_CONTINUATION_TOKEN, QUERY_FETCH_META, QUERY_FETCH_OWNER, QUERY_KEY_MARKER, QUERY_MARKER, QUERY_MAX_KEYS, QUERY_OFFSET, QUERY_PROCESS, QUERY_RECURSIVE, QUERY_SKIP_TRASH, QUERY_START_AFTER, QUERY_TASK_ID, QUERY_VERSION_ID, QUERY_VERSION_ID_MARKER, TRUE, UUID_NODE};
+use crate::constant::{DEFAULT_READ_BUFFER_SIZE, HEADER_CACHE_CONTROL, HEADER_CALLBACK, HEADER_CONTENT_DISPOSITION, HEADER_CONTENT_ENCODING, HEADER_CONTENT_LANGUAGE, HEADER_CONTENT_LENGTH, HEADER_CONTENT_MD5, HEADER_CONTENT_RANGE, HEADER_CONTENT_SHA256, HEADER_CONTENT_TYPE, HEADER_COPY_SOURCE_VERSION_ID, HEADER_DELETE_MARKER, HEADER_DIRECTORY, HEADER_ETAG, HEADER_EXPIRATION, HEADER_EXPIRES, HEADER_FETCH_DETECT_MIME_TYPE, HEADER_FORBID_OVERWRITE, HEADER_HASH_CRC64ECMA, HEADER_IF_NONE_MATCH, HEADER_LAST_MODIFIED, HEADER_LAST_MODIFIED_NS, HEADER_METADATA_DIRECTIVE, HEADER_MODIFY_TIMESTAMP, HEADER_MODIFY_TIMESTAMP_NS, HEADER_NEXT_APPEND_OFFSET, HEADER_NOTIFICATION_CUSTOM_PARAMETERS, HEADER_OBJECT_EXPIRES, HEADER_OBJECT_TYPE, HEADER_PREFIX_META, HEADER_RANGE, HEADER_RECURSIVE_MKDIR, HEADER_REPLICATION_STATUS, HEADER_RESTORE, HEADER_RESTORE_EXPIRY_DAYS, HEADER_RESTORE_REQUEST_DATE, HEADER_RESTORE_TIER, HEADER_SERVER_SIDE_ENCRYPTION, HEADER_SERVER_SIDE_ENCRYPTION_KMS_KEY_ID, HEADER_SSEC_ALGORITHM, HEADER_SSEC_KEY_MD5, HEADER_STORAGE_CLASS, HEADER_SYMLINK_BUCKET, HEADER_SYMLINK_TARGET, HEADER_SYMLINK_TARGET_SIZE, HEADER_TAGGING, HEADER_TAGGING_COUNT, HEADER_TAGGING_DIRECTIVE, HEADER_TRAFFIC_LIMIT, HEADER_TRANSFER_ENCODING_LOWER, HEADER_VERSION_ID, HEADER_WEBSITE_REDIRECT_LOCATION, HEADER_IF_MATCH, QUERY_CONTINUATION_TOKEN, QUERY_FETCH_META, QUERY_FETCH_OWNER, QUERY_KEY_MARKER, QUERY_MARKER, QUERY_MAX_KEYS, QUERY_OFFSET, QUERY_PART_NUMBER, QUERY_PROCESS, QUERY_RECURSIVE, QUERY_SKIP_TRASH, QUERY_START_AFTER, QUERY_TASK_ID, QUERY_UPLOAD_ID, QUERY_VERSION_ID, QUERY_VERSION_ID_MARKER, TRUE, UUID_NODE};
 use crate::enumeration::HttpMethodType::{HttpMethodDelete, HttpMethodGet, HttpMethodHead, HttpMethodPost, HttpMethodPut};
-use crate::enumeration::{ACLType, DocPreviewDstType, DocPreviewSrcType, MetadataDirectiveType, ObjectLockModeType, ReplicationStatusType, StorageClassType, TaggingDirectiveType, TierType};
+use crate::enumeration::{ACLType, DocPreviewDstType, DocPreviewSrcType, HttpMethodType, MetadataDirectiveType, ObjectLockModeType, ReplicationStatusType, StorageClassType, TaggingDirectiveType, TierType};
 use crate::error::{ErrorResponse, GenericError, TosError};
 use crate::http::{HttpRequest, HttpResponse, RequestContext};
 use crate::internal::{base64_md5, get_header_value_ref, map_insert, parse_json_by_buf, parse_response_string_by_buf, read_response, set_acl_header, set_copy_source_header, set_copy_source_if_condition_header, set_copy_source_ssec_header, set_data_process_query, set_http_basic_header, set_http_basic_header_for_fetch, set_if_match_header, set_misc_header, set_misc_header_for_fetch, set_object_lock_header, set_rewrite_response_query, set_sse_header, trans_meta, url_encode_with_safe};
@@ -278,7 +278,7 @@ impl<B> InputTranslator<B> for CopyObjectInput {
         if self.traffic_limit > 0 {
             header.insert(HEADER_TRAFFIC_LIMIT, self.traffic_limit.to_string());
         }
-        map_insert(header, HEADER_X_IF_MATCH, &self.if_match);
+        map_insert(header, HEADER_IF_MATCH, &self.if_match);
         map_insert(header, HEADER_IF_NONE_MATCH, &self.if_none_match);
 
         if self.tagging != "" {
@@ -449,7 +449,7 @@ impl<B> InputTranslator<B> for DeleteObjectInput {
     fn trans(&self, _: Arc<ConfigHolder>) -> Result<HttpRequest<B>, TosError> {
         let mut request = self.trans_key()?;
         request.method = HttpMethodDelete;
-        map_insert(&mut request.header, HEADER_X_IF_MATCH, &self.if_match);
+        map_insert(&mut request.header, HEADER_IF_MATCH, &self.if_match);
         let mut query = HashMap::with_capacity(3);
         map_insert(&mut query, QUERY_VERSION_ID, &self.version_id);
         if self.recursive {
@@ -782,6 +782,9 @@ pub struct GetObjectInput {
     pub(crate) rate_limiter: Option<Arc<RateLimiter>>,
     pub(crate) data_transfer_listener: Option<Sender<DataTransferStatus>>,
     pub(crate) async_data_transfer_listener: Option<async_channel::Sender<DataTransferStatus>>,
+
+    pub(crate) upload_id: String,
+    pub(crate) part_number: isize,
 }
 
 impl InputDescriptor for GetObjectInput {
@@ -842,6 +845,10 @@ impl<B> InputTranslator<B> for GetObjectInput {
 
         let mut query = HashMap::with_capacity(16);
         map_insert(&mut query, QUERY_VERSION_ID, &self.version_id);
+        map_insert(&mut query, QUERY_UPLOAD_ID, &self.upload_id);
+        if self.part_number > 0 {
+            query.insert(QUERY_PART_NUMBER, self.part_number.to_string());
+        }
         set_rewrite_response_query(&mut query, self);
         set_data_process_query(&mut query, self);
 
@@ -883,6 +890,8 @@ impl Default for GetObjectInput {
             rate_limiter: None,
             data_transfer_listener: None,
             async_data_transfer_listener: None,
+            upload_id: "".to_string(),
+            part_number: -1,
         }
     }
 }
@@ -935,6 +944,12 @@ impl GetObjectInput {
     pub fn rate_limiter(&self) -> &Option<Arc<RateLimiter>> {
         &self.rate_limiter
     }
+    pub fn upload_id(&self) -> &str {
+        &self.upload_id
+    }
+    pub fn part_number(&self) -> isize {
+        self.part_number
+    }
     pub fn set_bucket(&mut self, bucket: impl Into<String>) {
         self.bucket = bucket.into();
     }
@@ -958,6 +973,12 @@ impl GetObjectInput {
     }
     pub fn set_rate_limiter(&mut self, rate_limiter: impl Into<Arc<RateLimiter>>) {
         self.rate_limiter = Some(rate_limiter.into());
+    }
+    pub fn set_upload_id(&mut self, upload_id: impl Into<String>) {
+        self.upload_id = upload_id.into();
+    }
+    pub fn set_part_number(&mut self, part_number: isize) {
+        self.part_number = part_number;
     }
 }
 
@@ -983,12 +1004,19 @@ impl OutputParser for GetObjectOutput {
     }
 
     fn parse<B>(request: HttpRequest<B>, response: HttpResponse, request_info: RequestInfo, meta: Meta) -> Result<Self, TosError> {
+        let transfer_encoding = request_info.header.get(HEADER_TRANSFER_ENCODING_LOWER).map(|x| x.to_string());
         let head_object_output = HeadObjectOutput::parse_by_header(response.headers(), request_info, meta)?;
         let content_range = get_header_value(response.headers(), HEADER_CONTENT_RANGE);
         let mut target_crc64 = None;
         if request.enable_crc && !request.header.contains_key(HEADER_RANGE) &&
             (request.query.is_none() || !request.query.as_ref().unwrap().contains_key(QUERY_PROCESS)) {
-            target_crc64 = Some(head_object_output.hash_crc64ecma);
+            if let Some(te) = transfer_encoding {
+                if te != "chunked" {
+                    target_crc64 = Some(head_object_output.hash_crc64ecma);
+                }
+            } else {
+                target_crc64 = Some(head_object_output.hash_crc64ecma);
+            }
         }
         let mut crc64 = None;
         if target_crc64.is_some() {
@@ -1287,6 +1315,12 @@ impl GetObjectToFileInput {
     pub fn rate_limiter(&self) -> &Option<Arc<RateLimiter>> {
         &self.inner.rate_limiter
     }
+    pub fn upload_id(&self) -> &str {
+        &self.inner.upload_id
+    }
+    pub fn part_number(&self) -> isize {
+        self.inner.part_number
+    }
     pub fn set_bucket(&mut self, bucket: impl Into<String>) {
         self.inner.bucket = bucket.into();
     }
@@ -1311,6 +1345,12 @@ impl GetObjectToFileInput {
     pub fn set_rate_limiter(&mut self, rate_limiter: impl Into<Arc<RateLimiter>>) {
         self.inner.rate_limiter = Some(rate_limiter.into());
     }
+    pub fn set_upload_id(&mut self, upload_id: impl Into<String>) {
+        self.inner.upload_id = upload_id.into();
+    }
+    pub fn set_part_number(&mut self, part_number: isize) {
+        self.inner.part_number = part_number;
+    }
 }
 #[derive(Default)]
 pub struct GetObjectToFileOutput {
@@ -1326,12 +1366,19 @@ impl Debug for GetObjectToFileOutput {
 
 impl OutputParser for GetObjectToFileOutput {
     fn parse_by_ref<B>(request: &HttpRequest<B>, response: &mut HttpResponse, request_info: RequestInfo, meta: Meta) -> Result<Self, TosError> {
+        let transfer_encoding = request_info.header.get(HEADER_TRANSFER_ENCODING_LOWER).map(|x| x.to_string());
         let head_object_output = HeadObjectOutput::parse_by_header(response.headers(), request_info, meta)?;
         let content_range = get_header_value(response.headers(), HEADER_CONTENT_RANGE);
         let mut target_crc64 = None;
         if request.enable_crc && !request.header.contains_key(HEADER_RANGE) &&
             (request.query.is_none() || !request.query.as_ref().unwrap().contains_key(QUERY_PROCESS)) {
-            target_crc64 = Some(head_object_output.hash_crc64ecma);
+            if let Some(te) = transfer_encoding {
+                if te != "chunked" {
+                    target_crc64 = Some(head_object_output.hash_crc64ecma);
+                }
+            } else {
+                target_crc64 = Some(head_object_output.hash_crc64ecma);
+            }
         }
         let mut crc64 = None;
         if target_crc64.is_some() {
@@ -2060,7 +2107,7 @@ impl<B> InputTranslator<B> for AppendObjectBasicInput {
         if self.traffic_limit > 0 {
             header.insert(HEADER_TRAFFIC_LIMIT, self.traffic_limit.to_string());
         }
-        map_insert(header, HEADER_X_IF_MATCH, &self.if_match);
+        map_insert(header, HEADER_IF_MATCH, &self.if_match);
         map_insert(header, HEADER_IF_NONE_MATCH, &self.if_none_match);
         if self.object_expires >= 0 {
             header.insert(HEADER_OBJECT_EXPIRES, self.object_expires.to_string());
@@ -2309,7 +2356,6 @@ impl AppendObjectOutput {
 #[enable_content_length]
 #[use_inner]
 pub struct AppendObjectFromBufferInput {
-    pub(crate) generic_input: GenericInput,
     pub(crate) inner: AppendObjectBasicInput,
     pub(crate) content: Option<MultiBytes>,
 }
@@ -2494,6 +2540,169 @@ impl AppendObjectFromBufferInput {
         self.inner.notification_custom_parameters = notification_custom_parameters.into();
     }
 }
+#[derive(Debug, HttpBasicHeader, AclHeader, MiscHeader, GenericInput)]
+#[enable_content_length]
+#[use_inner]
+pub struct AppendObjectFromFileInput {
+    pub(crate) inner: AppendObjectBasicInput,
+    pub(crate) file_path: String,
+}
+
+impl InputDescriptor for AppendObjectFromFileInput {
+    fn operation(&self) -> &str {
+        "AppendObjectFromFile"
+    }
+
+    fn bucket(&self) -> Result<&str, TosError> {
+        Ok(&self.inner.bucket)
+    }
+
+    fn key(&self) -> Result<&str, TosError> {
+        Ok(&self.inner.key)
+    }
+}
+
+impl<B> InputTranslator<B> for AppendObjectFromFileInput
+where
+    B: BuildFileReader,
+{
+    fn trans(&self, config_holder: Arc<ConfigHolder>) -> Result<HttpRequest<B>, TosError> {
+        let mut request = self.inner.trans(config_holder)?;
+        request.operation = self.operation();
+        if self.file_path != "" {
+            let (body, len) = B::new(&self.file_path)?;
+            request.body = Some(body);
+            if let Some(l) = len {
+                if self.inner.content_length < 0 {
+                    request.header.insert(HEADER_CONTENT_LENGTH, l.to_string());
+                }
+            }
+        }
+        Ok(request)
+    }
+}
+
+impl DataTransferListener for AppendObjectFromFileInput {
+    fn data_transfer_listener(&self) -> &Option<Sender<DataTransferStatus>> {
+        &self.inner.data_transfer_listener
+    }
+
+    fn set_data_transfer_listener(&mut self, listener: impl Into<Sender<DataTransferStatus>>) {
+        self.inner.data_transfer_listener = Some(listener.into());
+    }
+}
+
+impl AppendObjectFromFileInput {
+    pub fn new(bucket: impl Into<String>, key: impl Into<String>) -> Self {
+        let mut input = Self::default();
+        input.inner.bucket = bucket.into();
+        input.inner.key = key.into();
+        input
+    }
+    pub fn new_with_file_path(bucket: impl Into<String>, key: impl Into<String>, file_path: impl Into<String>) -> Self {
+        let mut input = Self::default();
+        input.inner.bucket = bucket.into();
+        input.inner.key = key.into();
+        input.file_path = file_path.into();
+        input
+    }
+    pub fn new_with_offset(bucket: impl Into<String>, key: impl Into<String>, offset: i64) -> Self {
+        let mut input = Self::default();
+        input.inner.bucket = bucket.into();
+        input.inner.key = key.into();
+        input.inner.offset = offset;
+        input
+    }
+    pub fn new_with_offset_file_path(bucket: impl Into<String>, key: impl Into<String>, offset: i64, file_path: impl Into<String>) -> Self {
+        let mut input = Self::default();
+        input.inner.bucket = bucket.into();
+        input.inner.key = key.into();
+        input.inner.offset = offset;
+        input.file_path = file_path.into();
+        input
+    }
+    pub fn bucket(&self) -> &str {
+        &self.inner.bucket
+    }
+    pub fn key(&self) -> &str {
+        &self.inner.key
+    }
+    pub fn file_path(&self) -> &str {
+        &self.file_path
+    }
+    pub fn meta(&self) -> &HashMap<String, String> {
+        &self.inner.meta
+    }
+    pub fn traffic_limit(&self) -> i64 {
+        self.inner.traffic_limit
+    }
+    pub fn if_match(&self) -> &str {
+        &self.inner.if_match
+    }
+    pub fn if_none_match(&self) -> &str {
+        &self.inner.if_none_match
+    }
+    pub fn object_expires(&self) -> i64 {
+        self.inner.object_expires
+    }
+    pub fn rate_limiter(&self) -> &Option<Arc<RateLimiter>> {
+        &self.inner.rate_limiter
+    }
+    pub fn notification_custom_parameters(&self) -> &str {
+        &self.inner.notification_custom_parameters
+    }
+    pub fn offset(&self) -> i64 {
+        self.inner.offset
+    }
+    pub fn pre_hash_crc64ecma(&self) -> u64 {
+        self.inner.pre_hash_crc64ecma
+    }
+    pub fn set_bucket(&mut self, bucket: impl Into<String>) {
+        self.inner.bucket = bucket.into();
+    }
+    pub fn set_key(&mut self, key: impl Into<String>) {
+        self.inner.key = key.into();
+    }
+    pub fn set_file_path(&mut self, file_path: impl Into<String>) {
+        self.file_path = file_path.into();
+    }
+    pub fn set_meta(&mut self, meta: impl Into<HashMap<String, String>>) {
+        self.inner.meta = meta.into();
+    }
+    pub fn set_traffic_limit(&mut self, traffic_limit: i64) {
+        self.inner.traffic_limit = traffic_limit;
+    }
+    pub fn set_if_match(&mut self, if_match: impl Into<String>) {
+        self.inner.if_match = if_match.into();
+    }
+    pub fn set_if_none_match(&mut self, if_none_match: impl Into<String>) {
+        self.inner.if_none_match = if_none_match.into();
+    }
+    pub fn set_object_expires(&mut self, object_expires: i64) {
+        self.inner.object_expires = object_expires;
+    }
+    pub fn set_rate_limiter(&mut self, rate_limiter: impl Into<Arc<RateLimiter>>) {
+        self.inner.rate_limiter = Some(rate_limiter.into());
+    }
+    pub fn set_notification_custom_parameters(&mut self, notification_custom_parameters: impl Into<String>) {
+        self.inner.notification_custom_parameters = notification_custom_parameters.into();
+    }
+    pub fn set_offset(&mut self, offset: i64) {
+        self.inner.offset = offset;
+    }
+    pub fn set_pre_hash_crc64ecma(&mut self, pre_hash_crc64ecma: u64) {
+        self.inner.pre_hash_crc64ecma = pre_hash_crc64ecma;
+    }
+}
+
+impl Default for AppendObjectFromFileInput {
+    fn default() -> Self {
+        Self {
+            inner: Default::default(),
+            file_path: "".to_string(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, ListCommonQuery, GenericInput)]
 pub struct ListObjectsInput {
@@ -2629,7 +2838,12 @@ impl OutputParser for ListObjectsOutput {
             if let Some(x) = content.user_meta.take() {
                 let mut meta = HashMap::with_capacity(x.len());
                 for item in x {
-                    if let Ok(dk) = urlencoding::decode(&item.key[HEADER_PREFIX_META.len()..]) {
+                    let key = if item.key.starts_with(HEADER_PREFIX_META) {
+                        &item.key[HEADER_PREFIX_META.len()..]
+                    } else {
+                        &item.key
+                    };
+                    if let Ok(dk) = urlencoding::decode(key) {
                         if let Ok(dv) = urlencoding::decode(item.value.as_str()) {
                             meta.insert(dk.to_string(), dv.to_string());
                         }
@@ -2761,11 +2975,14 @@ impl ListedObject {
         &self.object_type
     }
 
+    /// Returns the parsed CRC32C value, or `None` when the service value is
+    /// missing, malformed, or outside the `u32` range.
     pub fn hash_crc32c(&self) -> Option<u32> {
-        match &self.hash_crc32c {
-            None => None,
-            Some(hash_crc32c) => Some(hash_crc32c.parse::<u32>().unwrap_or_else(|_| 0))
-        }
+        // [Review Fix #1] Invalid service metadata must not become the valid
+        // checksum zero through u32::default().
+        self.hash_crc32c
+            .as_deref()
+            .and_then(|hash_crc32c| hash_crc32c.parse::<u32>().ok())
     }
 }
 
@@ -2967,7 +3184,12 @@ impl OutputParser for ListObjectsType2Output {
             if let Some(x) = content.user_meta.take() {
                 let mut meta = HashMap::with_capacity(x.len());
                 for item in x {
-                    if let Ok(dk) = urlencoding::decode(&item.key[HEADER_PREFIX_META.len()..]) {
+                    let key = if item.key.starts_with(HEADER_PREFIX_META) {
+                        &item.key[HEADER_PREFIX_META.len()..]
+                    } else {
+                        &item.key
+                    };
+                    if let Ok(dk) = urlencoding::decode(key) {
                         if let Ok(dv) = urlencoding::decode(item.value.as_str()) {
                             meta.insert(dk.to_string(), dv.to_string());
                         }
@@ -3180,7 +3402,12 @@ impl OutputParser for ListObjectVersionsOutput {
             if let Some(x) = version.user_meta.take() {
                 let mut meta = HashMap::with_capacity(x.len());
                 for item in x {
-                    if let Ok(dk) = urlencoding::decode(&item.key[HEADER_PREFIX_META.len()..]) {
+                    let key = if item.key.starts_with(HEADER_PREFIX_META) {
+                        &item.key[HEADER_PREFIX_META.len()..]
+                    } else {
+                        &item.key
+                    };
+                    if let Ok(dk) = urlencoding::decode(key) {
                         if let Ok(dv) = urlencoding::decode(item.value.as_str()) {
                             meta.insert(dk.to_string(), dv.to_string());
                         }
@@ -3237,6 +3464,9 @@ pub struct ListedObjectVersion {
     pub(crate) user_meta: Option<Vec<MetaItem>>,
     #[serde(skip)]
     pub(crate) meta: HashMap<String, String>,
+    #[serde(default)]
+    #[serde(rename = "Type")]
+    pub(crate) object_type: String,
 }
 
 impl ListedObjectVersion {
@@ -3264,11 +3494,14 @@ impl ListedObjectVersion {
     pub fn version_id(&self) -> &str {
         &self.version_id
     }
-    pub fn hash_crc64ecma(&self) -> &str {
-        &self.hash_crc64ecma
+    pub fn hash_crc64ecma(&self) -> u64 {
+        self.hash_crc64ecma.parse::<u64>().unwrap_or_else(|_| 0)
     }
     pub fn meta(&self) -> &HashMap<String, String> {
         &self.meta
+    }
+    pub fn object_type(&self) -> &str {
+        &self.object_type
     }
 }
 
@@ -3471,7 +3704,7 @@ impl<B> InputTranslator<B> for PutObjectBasicInput {
         if self.traffic_limit > 0 {
             header.insert(HEADER_TRAFFIC_LIMIT, self.traffic_limit.to_string());
         }
-        map_insert(header, HEADER_X_IF_MATCH, &self.if_match);
+        map_insert(header, HEADER_IF_MATCH, &self.if_match);
         map_insert(header, HEADER_IF_NONE_MATCH, &self.if_none_match);
 
         if self.tagging != "" {
@@ -6438,7 +6671,7 @@ impl<B> InputTranslator<B> for ModifyObjectInput<B> {
             header.insert(HEADER_TRAFFIC_LIMIT, self.traffic_limit.to_string());
         }
         map_insert(header, HEADER_NOTIFICATION_CUSTOM_PARAMETERS, &self.notification_custom_parameters);
-        map_insert(header, HEADER_X_IF_MATCH, &self.if_match);
+        map_insert(header, HEADER_IF_MATCH, &self.if_match);
         let mut query = HashMap::with_capacity(2);
         query.insert("modify", "".to_string());
         query.insert(QUERY_OFFSET, self.offset.to_string());
@@ -6677,7 +6910,7 @@ where
             header.insert(HEADER_TRAFFIC_LIMIT, self.traffic_limit.to_string());
         }
         map_insert(header, HEADER_NOTIFICATION_CUSTOM_PARAMETERS, &self.notification_custom_parameters);
-        map_insert(header, HEADER_X_IF_MATCH, &self.if_match);
+        map_insert(header, HEADER_IF_MATCH, &self.if_match);
         let mut query = HashMap::with_capacity(2);
         query.insert("modify", "".to_string());
         query.insert(QUERY_OFFSET, self.offset.to_string());
@@ -6692,6 +6925,208 @@ where
         Ok(request)
     }
 }
+
+#[derive(Debug, Clone, GenericInput)]
+pub(crate) struct ModifyObjectFromFileInput {
+    pub(crate) generic_input: GenericInput,
+    pub(crate) bucket: String,
+    pub(crate) key: String,
+    pub(crate) offset: i64,
+    pub(crate) file_path: String,
+
+    pub(crate) content_length: i64,
+    pub(crate) traffic_limit: i64,
+    pub(crate) async_data_transfer_listener: Option<async_channel::Sender<DataTransferStatus>>,
+    pub(crate) notification_custom_parameters: String,
+    pub(crate) if_match: String,
+
+    pub(crate) pre_hash_crc64ecma: u64,
+}
+
+impl Default for ModifyObjectFromFileInput {
+    fn default() -> Self {
+        Self {
+            generic_input: Default::default(),
+            bucket: "".to_string(),
+            key: "".to_string(),
+            offset: 0,
+            file_path: "".to_string(),
+            content_length: -1,
+            traffic_limit: 0,
+            async_data_transfer_listener: None,
+            notification_custom_parameters: "".to_string(),
+            if_match: "".to_string(),
+            pre_hash_crc64ecma: 0,
+        }
+    }
+}
+
+impl ModifyObjectFromFileInput {
+    pub fn new(bucket: impl Into<String>, key: impl Into<String>) -> Self {
+        let mut input = Self::default();
+        input.bucket = bucket.into();
+        input.key = key.into();
+        input
+    }
+    pub fn new_with_offset(bucket: impl Into<String>, key: impl Into<String>, offset: i64) -> Self {
+        let mut input = Self::default();
+        input.bucket = bucket.into();
+        input.key = key.into();
+        input.offset = offset;
+        input
+    }
+    pub fn new_with_file_path(bucket: impl Into<String>, key: impl Into<String>, file_path: impl Into<String>) -> Self {
+        let mut input = Self::default();
+        input.bucket = bucket.into();
+        input.key = key.into();
+        input.file_path = file_path.into();
+        input
+    }
+    pub fn new_with_offset_content(bucket: impl Into<String>, key: impl Into<String>, offset: i64, file_path: impl Into<String>) -> Self {
+        let mut input = Self::default();
+        input.bucket = bucket.into();
+        input.key = key.into();
+        input.offset = offset;
+        input.file_path = file_path.into();
+        input
+    }
+    pub fn bucket(&self) -> &str {
+        &self.bucket
+    }
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+    pub fn file_path(&self) -> &str {
+        &self.file_path
+    }
+    pub fn offset(&self) -> i64 {
+        self.offset
+    }
+
+    pub fn content_length(&self) -> i64 {
+        self.content_length
+    }
+
+    pub fn traffic_limit(&self) -> i64 {
+        self.traffic_limit
+    }
+
+    pub fn notification_custom_parameters(&self) -> &str {
+        &self.notification_custom_parameters
+    }
+    pub fn if_match(&self) -> &str {
+        &self.if_match
+    }
+
+    pub fn set_bucket(&mut self, bucket: impl Into<String>) {
+        self.bucket = bucket.into();
+    }
+
+    pub fn set_key(&mut self, key: impl Into<String>) {
+        self.key = key.into();
+    }
+
+    pub fn set_offset(&mut self, offset: i64) {
+        self.offset = offset;
+    }
+    pub fn set_file_path(&mut self, file_path: impl Into<String>) {
+        self.file_path = file_path.into();
+    }
+    pub fn set_content_length(&mut self, content_length: i64) {
+        self.content_length = content_length;
+    }
+
+    pub fn set_traffic_limit(&mut self, traffic_limit: i64) {
+        self.traffic_limit = traffic_limit;
+    }
+
+    pub fn set_notification_custom_parameters(&mut self, notification_custom_parameters: impl Into<String>) {
+        self.notification_custom_parameters = notification_custom_parameters.into();
+    }
+    pub fn set_if_match(&mut self, if_match: impl Into<String>) {
+        self.if_match = if_match.into();
+    }
+
+    pub(crate) fn inner_trans<'a>(&self) -> Result<(HttpMethodType, Option<RequestContext<'a>>, HashMap<&'a str, String>,
+                                                    Option<HashMap<&'a str, String>>,), TosError> {
+        if self.offset < 0
+        {
+            return Err(TosError::client_error("invalid offset for modify object"));
+        }
+
+        let mut request_context: Option<RequestContext<'a>> = None;
+        if let Some(ref adts) = self.async_data_transfer_listener {
+            if request_context.is_some() {
+                request_context.as_mut().unwrap().async_data_transfer_listener = Some(adts.clone());
+            } else {
+                let mut rc = RequestContext::default();
+                rc.async_data_transfer_listener = Some(adts.clone());
+                request_context = Some(rc);
+            }
+        }
+
+        if self.pre_hash_crc64ecma > 0 {
+            if request_context.is_some() {
+                request_context.as_mut().unwrap().init_crc64 = Some(self.pre_hash_crc64ecma);
+            } else {
+                let mut rc = RequestContext::default();
+                rc.init_crc64 = Some(self.pre_hash_crc64ecma);
+                request_context = Some(rc);
+            }
+        }
+
+        let mut header = HashMap::new();
+        if self.content_length >= 0 {
+            header.insert(HEADER_CONTENT_LENGTH, self.content_length.to_string());
+        }
+        if self.traffic_limit > 0 {
+            header.insert(HEADER_TRAFFIC_LIMIT, self.traffic_limit.to_string());
+        }
+        map_insert(&mut header, HEADER_NOTIFICATION_CUSTOM_PARAMETERS, &self.notification_custom_parameters);
+        map_insert(&mut header, HEADER_IF_MATCH, &self.if_match);
+        let mut query = HashMap::with_capacity(2);
+        query.insert("modify", "".to_string());
+        query.insert(QUERY_OFFSET, self.offset.to_string());
+        Ok((HttpMethodPost, request_context, header, Some(query)))
+    }
+}
+
+impl InputDescriptor for ModifyObjectFromFileInput {
+    fn operation(&self) -> &str {
+        "ModifyObjectFromFile"
+    }
+    fn bucket(&self) -> Result<&str, TosError> {
+        Ok(&self.bucket)
+    }
+    fn key(&self) -> Result<&str, TosError> {
+        Ok(&self.key)
+    }
+}
+
+impl<B> InputTranslator<B> for ModifyObjectFromFileInput
+where
+    B: BuildFileReader,
+{
+    fn trans(&self, _: Arc<ConfigHolder>) -> Result<HttpRequest<B>, TosError> {
+        let mut request = self.trans_key()?;
+        let (method, request_context, header, query) = self.inner_trans()?;
+        request.method = method;
+        request.request_context = request_context;
+        request.header = header;
+        request.query = query;
+        if self.file_path != "" {
+            let (body, len) = B::new(&self.file_path)?;
+            request.body = Some(body);
+            if let Some(l) = len {
+                if self.content_length < 0 {
+                    request.header.insert(HEADER_CONTENT_LENGTH, l.to_string());
+                }
+            }
+        }
+        Ok(request)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, GenericInput)]
 pub struct DoesObjectExistInput {
     pub(crate) generic_input: GenericInput,
@@ -6831,4 +7266,23 @@ impl<B> InputTranslator<B> for SetObjectTimeInput {
 #[derive(Debug, Clone, PartialEq, Default, RequestInfo)]
 pub struct SetObjectTimeOutput {
     pub(crate) request_info: RequestInfo,
+}
+
+#[cfg(test)]
+mod crc32c_tests {
+    use super::ListedObject;
+
+    #[test]
+    fn listed_object_crc32c_preserves_presence_and_rejects_invalid_values() {
+        for (payload, expected) in [
+            (r#"{}"#, None),
+            (r#"{"HashCrc32c":"invalid"}"#, None),
+            (r#"{"HashCrc32c":"4294967296"}"#, None),
+            (r#"{"HashCrc32c":"0"}"#, Some(0)),
+            (r#"{"HashCrc32c":"4294967295"}"#, Some(u32::MAX)),
+        ] {
+            let object: ListedObject = serde_json::from_str(payload).unwrap();
+            assert_eq!(object.hash_crc32c(), expected);
+        }
+    }
 }

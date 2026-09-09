@@ -730,6 +730,13 @@ pub(crate) fn read_response(response: &mut HttpResponse) -> Result<Vec<u8>, TosE
             Ok(buf)
         }
         Some(x) => {
+            // [Review Fix #2] Check Content-Length before allocation to avoid oversized Vec reserve.
+            if x > MAX_READ_BUFFER_SIZE_FOR_JSON as u64 {
+                return Err(TosError::client_error(format!(
+                    "response body too large: {} bytes, max allowed: {} bytes",
+                    x, MAX_READ_BUFFER_SIZE_FOR_JSON
+                )));
+            }
             buf = Vec::with_capacity(x as usize);
             // wrap with reader length check
             let mut readable = InternalReader::sized(response, x as usize);
@@ -770,7 +777,7 @@ pub(crate) fn sleep_for_retry(retry_count: isize, retry_after: isize) {
     thread::sleep(time::Duration::from_millis(delay))
 }
 
-pub(crate) fn check_bucket_and_key<T>(input: &T, is_custom_domain: bool) -> Result<&str, TosError>
+pub(crate) fn check_bucket_and_key<T>(input: &T, is_custom_domain: bool) -> Result<(&str, &str, &str), TosError>
 where
     T: InputDescriptor,
 {
@@ -784,14 +791,18 @@ where
         } else if !is_custom_domain {
             check_bucket(bucket_or_account_id.trim())?;
         }
-    } else if let Ok(bucket_or_account_id) = input.bucket() {
+        return Ok((input.operation(), bucket_or_account_id, key));
+    }
+
+    if let Ok(bucket_or_account_id) = input.bucket() {
         if input.is_control_operation() {
             check_account_id(bucket_or_account_id.trim())?;
         } else if !is_custom_domain {
             check_bucket(bucket_or_account_id.trim())?;
         }
+        return Ok((input.operation(), bucket_or_account_id, ""));
     }
-    Ok(input.operation())
+    Ok((input.operation(), "", ""))
 }
 
 pub(crate) fn check_bucket(bucket: &str) -> Result<(), TosError> {

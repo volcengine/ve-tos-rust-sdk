@@ -13,12 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
-use url::Url;
-
 use super::constant::*;
 use super::error::{GenericError, TosError};
 use super::internal::url_encode_with_safe;
+use crate::enumeration::AsyncFileUploadReaderMode;
+use std::collections::HashMap;
+use url::Url;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConfigHolder {
@@ -48,6 +48,7 @@ pub(crate) struct ConfigHolder {
     pub(crate) client_crt: String,
     pub(crate) client_key: String,
     pub(crate) ca_crt: String,
+    pub(crate) async_file_upload_reader_mode: AsyncFileUploadReaderMode,
 
     pub(crate) user_agent: String,
     pub(crate) region: String,
@@ -89,6 +90,7 @@ impl Default for ConfigHolder {
             follow_redirect_times: 0,
             client_crt: "".to_string(),
             client_key: "".to_string(),
+            async_file_upload_reader_mode: Default::default(),
             schema: "".to_string(),
             domain: "".to_string(),
             port: None,
@@ -99,9 +101,12 @@ impl Default for ConfigHolder {
     }
 }
 
-
 impl ConfigHolder {
-    pub(crate) fn check(&mut self, endpoint: impl Into<String>, region: impl Into<String>) -> Result<(), TosError> {
+    pub(crate) fn check(
+        &mut self,
+        endpoint: impl Into<String>,
+        region: impl Into<String>,
+    ) -> Result<(), TosError> {
         let region = region.into().trim().to_owned();
         if region == "" {
             return TosError::client_error_result("no region specified");
@@ -119,7 +124,9 @@ impl ConfigHolder {
 
         let (schema, domain, port) = self.split_endpoint(endpoint.as_str())?;
         if TOS_S3_ENDPOINTS.contains_key(domain.as_str()) {
-            return TosError::client_error_result("invalid endpoint, please use TOS endpoint rather than S3 endpoint");
+            return TosError::client_error_result(
+                "invalid endpoint, please use TOS endpoint rather than S3 endpoint",
+            );
         }
 
         self.region = region.to_owned();
@@ -129,7 +136,10 @@ impl ConfigHolder {
         Ok(())
     }
 
-    pub(crate) fn check_control(&mut self, control_endpoint: impl Into<String>) -> Result<(), TosError> {
+    pub(crate) fn check_control(
+        &mut self,
+        control_endpoint: impl Into<String>,
+    ) -> Result<(), TosError> {
         let region = self.region.as_str();
         if region == "" {
             return TosError::client_error_result("no region specified");
@@ -144,7 +154,9 @@ impl ConfigHolder {
         if control_endpoint != "" {
             let (schema, domain, port) = self.split_endpoint(control_endpoint.as_str())?;
             if port != self.port {
-                return TosError::client_error_result("mismatched port between control endpoint and endpoint");
+                return TosError::client_error_result(
+                    "mismatched port between control endpoint and endpoint",
+                );
             }
 
             self.schema_control = schema;
@@ -154,10 +166,25 @@ impl ConfigHolder {
     }
 
     pub(crate) fn gen_user_agent(&mut self) {
-        if self.user_agent_product_name == "" && self.user_agent_soft_name == "" && self.user_agent_soft_version == ""
-            && (self.user_agent_customized_key_values.is_none() || self.user_agent_customized_key_values.as_ref().unwrap().is_empty()) {
-            self.user_agent = String::from("ve-tos-rust-sdk/".to_string() + env!("CARGO_PKG_VERSION") +
-                " (" + std::env::consts::OS + "/" + std::env::consts::ARCH + ")");
+        if self.user_agent_product_name == ""
+            && self.user_agent_soft_name == ""
+            && self.user_agent_soft_version == ""
+            && (self.user_agent_customized_key_values.is_none()
+                || self
+                    .user_agent_customized_key_values
+                    .as_ref()
+                    .unwrap()
+                    .is_empty())
+        {
+            self.user_agent = String::from(
+                "ve-tos-rust-sdk/".to_string()
+                    + env!("CARGO_PKG_VERSION")
+                    + " ("
+                    + std::env::consts::OS
+                    + "/"
+                    + std::env::consts::ARCH
+                    + ")",
+            );
         } else {
             let mut product_name = self.user_agent_product_name.as_str();
             if product_name == "" {
@@ -171,9 +198,15 @@ impl ConfigHolder {
             if soft_version == "" {
                 soft_version = UNDEFINED;
             }
-            let mut user_agent = String::from(format!("ve-tos-rust-sdk/{} ({}/{}) -- {}/{}/{}",
-                                                      env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH,
-                                                      product_name, soft_name, soft_version));
+            let mut user_agent = String::from(format!(
+                "ve-tos-rust-sdk/{} ({}/{}) -- {}/{}/{}",
+                env!("CARGO_PKG_VERSION"),
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                product_name,
+                soft_name,
+                soft_version
+            ));
 
             if let Some(kv) = self.user_agent_customized_key_values.as_ref() {
                 user_agent.push('(');
@@ -197,7 +230,10 @@ impl ConfigHolder {
         }
     }
 
-    pub(crate) fn split_endpoint(&self, endpoint: &str) -> Result<(String, String, Option<isize>), TosError> {
+    pub(crate) fn split_endpoint(
+        &self,
+        endpoint: &str,
+    ) -> Result<(String, String, Option<isize>), TosError> {
         let mut endpoint = endpoint;
         while endpoint.len() > 0 && endpoint.ends_with("/") {
             endpoint = &endpoint[0..endpoint.len() - 1];
@@ -224,7 +260,10 @@ impl ConfigHolder {
         Ok((schema, domain, port))
     }
 
-    pub(crate) fn parse_domain(&self, input: &str) -> Result<(String, String, Option<isize>), TosError> {
+    pub(crate) fn parse_domain(
+        &self,
+        input: &str,
+    ) -> Result<(String, String, Option<isize>), TosError> {
         let mut domain = String::with_capacity(input.len());
         match Url::parse(input) {
             Ok(u) => {
@@ -242,9 +281,10 @@ impl ConfigHolder {
                     Err(TosError::client_error("no host error"))
                 }
             }
-            Err(e) => {
-                Err(TosError::client_error_with_cause("parse domain error", GenericError::UrlParseError(e)))
-            }
+            Err(e) => Err(TosError::client_error_with_cause(
+                "parse domain error",
+                GenericError::UrlParseError(e),
+            )),
         }
     }
 
@@ -252,7 +292,12 @@ impl ConfigHolder {
         self.get_host_with_domain(bucket, "", self.is_custom_domain)
     }
 
-    pub(crate) fn get_host_with_domain(&self, bucket: &str, domain: &str, is_custom_domain: bool) -> String {
+    pub(crate) fn get_host_with_domain(
+        &self,
+        bucket: &str,
+        domain: &str,
+        is_custom_domain: bool,
+    ) -> String {
         let mut domain = domain;
         if domain == "" {
             domain = &self.domain;
@@ -270,7 +315,15 @@ impl ConfigHolder {
         self.get_endpoint_with_domain(bucket, key, "", "", true, self.is_custom_domain)
     }
 
-    pub(crate) fn get_endpoint_with_domain(&self, bucket: &str, key: &str, schema: &str, domain: &str, must_add_key: bool, is_custom_domain: bool) -> String {
+    pub(crate) fn get_endpoint_with_domain(
+        &self,
+        bucket: &str,
+        key: &str,
+        schema: &str,
+        domain: &str,
+        must_add_key: bool,
+        is_custom_domain: bool,
+    ) -> String {
         let mut schema = schema;
         if schema == "" {
             schema = &self.schema;
@@ -279,7 +332,8 @@ impl ConfigHolder {
         if domain == "" {
             domain = &self.domain;
         }
-        let mut endpoint = String::with_capacity(schema.len() + domain.len() + bucket.len() + key.len() * 2 + 3);
+        let mut endpoint =
+            String::with_capacity(schema.len() + domain.len() + bucket.len() + key.len() * 2 + 3);
         endpoint += schema;
 
         if bucket != "" && !is_custom_domain {

@@ -26,7 +26,7 @@ use ve_tos_generic::{AclHeader, CallbackHeader, CopySourceHeader, CopySourceIfCo
 
 use crate::common::{DataTransferListener, DataTransferStatus, GenericInput, ListedCommonPrefix, Meta, Owner, RateLimiter, RequestInfo, TempCopyResult};
 use crate::config::ConfigHolder;
-use crate::constant::{HEADER_CALLBACK, HEADER_COMPLETE_ALL, HEADER_CONTENT_LENGTH, HEADER_CONTENT_MD5, HEADER_COPY_SOURCE_RANGE, HEADER_COPY_SOURCE_VERSION_ID, HEADER_ETAG, HEADER_FORBID_OVERWRITE, HEADER_HASH_CRC64ECMA, HEADER_IF_NONE_MATCH, HEADER_LOCATION, HEADER_OBJECT_EXPIRES, HEADER_SERVER_SIDE_ENCRYPTION, HEADER_SERVER_SIDE_ENCRYPTION_KMS_KEY_ID, HEADER_SSEC_ALGORITHM, HEADER_SSEC_KEY_MD5, HEADER_TAGGING, HEADER_TRAFFIC_LIMIT, HEADER_VERSION_ID, HEADER_X_IF_MATCH, QUERY_ENCODING_TYPE, QUERY_KEY_MARKER, QUERY_MAX_PARTS, QUERY_MAX_UPLOADS, QUERY_PART_NUMBER, QUERY_PART_NUMBER_MARKER, QUERY_UPLOAD_ID_MARKER};
+use crate::constant::{HEADER_CALLBACK, HEADER_COMPLETE_ALL, HEADER_CONTENT_LENGTH, HEADER_CONTENT_MD5, HEADER_COPY_SOURCE_RANGE, HEADER_COPY_SOURCE_VERSION_ID, HEADER_ETAG, HEADER_FORBID_OVERWRITE, HEADER_HASH_CRC64ECMA, HEADER_IF_NONE_MATCH, HEADER_LOCATION, HEADER_OBJECT_EXPIRES, HEADER_SERVER_SIDE_ENCRYPTION, HEADER_SERVER_SIDE_ENCRYPTION_KMS_KEY_ID, HEADER_SSEC_ALGORITHM, HEADER_SSEC_KEY_MD5, HEADER_TAGGING, HEADER_TRAFFIC_LIMIT, HEADER_VERSION_ID, HEADER_IF_MATCH, QUERY_ENCODING_TYPE, QUERY_KEY_MARKER, QUERY_MAX_PARTS, QUERY_MAX_UPLOADS, QUERY_PART_NUMBER, QUERY_PART_NUMBER_MARKER, QUERY_UPLOAD_ID_MARKER};
 use crate::enumeration::HttpMethodType::{HttpMethodDelete, HttpMethodGet, HttpMethodPost, HttpMethodPut};
 use crate::enumeration::{ACLType, StorageClassType};
 use crate::error::{ErrorResponse, GenericError, TosError};
@@ -190,7 +190,7 @@ impl<B> InputTranslator<B> for CreateMultipartUploadInput {
         if self.forbid_overwrite {
             header.insert(HEADER_FORBID_OVERWRITE, self.forbid_overwrite.to_string());
         }
-        map_insert(header, HEADER_X_IF_MATCH, &self.if_match);
+        map_insert(header, HEADER_IF_MATCH, &self.if_match);
         map_insert(header, HEADER_IF_NONE_MATCH, &self.if_none_match);
         if self.object_expires >= 0 {
             header.insert(HEADER_OBJECT_EXPIRES, self.object_expires.to_string());
@@ -956,7 +956,7 @@ where
             }
         }
         set_callback_header(header, self);
-        map_insert(header, HEADER_X_IF_MATCH, &self.if_match);
+        map_insert(header, HEADER_IF_MATCH, &self.if_match);
         map_insert(header, HEADER_IF_NONE_MATCH, &self.if_none_match);
         if self.forbid_overwrite {
             header.insert(HEADER_FORBID_OVERWRITE, self.forbid_overwrite.to_string());
