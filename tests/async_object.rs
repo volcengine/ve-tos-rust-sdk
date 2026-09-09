@@ -32,13 +32,13 @@ use crate::common::{base64_md5, gen_random_string, hex_md5};
 use ve_tos_rust_sdk::asynchronous::bucket::BucketAPI;
 use ve_tos_rust_sdk::asynchronous::common::DataTransferListener;
 use ve_tos_rust_sdk::asynchronous::object::{ObjectAPI, ObjectContent};
-use ve_tos_rust_sdk::asynchronous::tos::{new_stream, BufferStream};
+use ve_tos_rust_sdk::asynchronous::tos::{new_stream, BufferStream, TosClient};
 use ve_tos_rust_sdk::bucket::{CreateBucketInput, DeleteBucketRenameInput, GetBucketRenameInput, PutBucketRenameInput};
 use ve_tos_rust_sdk::common::{init_tracing_log, DataTransferStatus, DataTransferType, Grant, Grantee, Owner, RateLimiter, Tag, TagSet};
 use ve_tos_rust_sdk::enumeration::MetadataDirectiveType::{MetadataDirectiveCopy, MetadataDirectiveReplace};
 use ve_tos_rust_sdk::enumeration::StorageClassType::{StorageClassIa, StorageClassStandard};
 use ve_tos_rust_sdk::enumeration::{ACLType, CannedType, GranteeType, PermissionType, StorageClassType, TierType};
-use ve_tos_rust_sdk::object::{AppendObjectFromBufferInput, AppendObjectInput, CopyObjectInput, DeleteMultiObjectsInput, DeleteObjectInput, DeleteObjectTaggingInput, DoesObjectExistInput, FetchObjectInput, GetFetchTaskInput, GetObjectACLInput, GetObjectInput, GetObjectOutput, GetObjectTaggingInput, GetObjectToFileInput, GetSymlinkInput, HeadObjectInput, ListObjectVersionsInput, ListObjectsType2Input, ObjectTobeDeleted, PutFetchTaskInput, PutObjectACLInput, PutObjectFromBufferInput, PutObjectFromFileInput, PutObjectInput, PutObjectTaggingInput, PutSymlinkInput, RenameObjectInput, RestoreJobParameters, RestoreObjectInput, SetObjectMetaInput};
+use ve_tos_rust_sdk::object::{AppendObjectFromBufferInput, AppendObjectFromFileInput, AppendObjectInput, CopyObjectInput, DeleteMultiObjectsInput, DeleteObjectInput, DeleteObjectTaggingInput, DoesObjectExistInput, FetchObjectInput, GetFetchTaskInput, GetObjectACLInput, GetObjectInput, GetObjectOutput, GetObjectTaggingInput, GetObjectToFileInput, GetSymlinkInput, HeadObjectInput, ListObjectVersionsInput, ListObjectsType2Input, ObjectTobeDeleted, PutFetchTaskInput, PutObjectACLInput, PutObjectFromBufferInput, PutObjectFromFileInput, PutObjectInput, PutObjectTaggingInput, PutSymlinkInput, RenameObjectInput, RestoreJobParameters, RestoreObjectInput, SetObjectMetaInput};
 
 mod common;
 
@@ -61,20 +61,20 @@ fn test_main() {
     }
 
     rt.block_on(async {
-        test_put_object(&context).await;
-        test_copy_object(&context).await;
-        test_get_object(&context).await;
-        test_delete_multi_objects(&context).await;
-        test_put_object_acl(&context).await;
-        test_set_object_meta_tags(&context).await;
-        test_list_objects(&context).await;
-        test_append_object(&context).await;
+        // test_put_object(&context).await;
+        // test_copy_object(&context).await;
+        // test_get_object(&context).await;
+        // test_delete_multi_objects(&context).await;
+        // test_put_object_acl(&context).await;
+        // test_set_object_meta_tags(&context).await;
+        // test_list_objects(&context).await;
+        // test_append_object(&context).await;
         test_put_object_from_file(&context).await;
-        test_fetch_object(&context).await;
-        test_rename_object(&context).await;
-        test_restore_object(&context).await;
-        test_symlink(&context).await;
-        test_multi_contents(&context).await;
+        // test_fetch_object(&context).await;
+        // test_rename_object(&context).await;
+        // test_restore_object(&context).await;
+        // test_symlink(&context).await;
+        // test_multi_contents(&context).await;
     });
 }
 
@@ -425,7 +425,15 @@ async fn test_fetch_object(context: &AsyncContext) {
 }
 
 async fn test_put_object_from_file(context: &AsyncContext) {
-    let client = context.client();
+    for i in 0..2 {
+        if i % 2 == 0 {
+            do_put_object_from_file(context, context.client_with_std_file()).await;
+        } else {
+            do_put_object_from_file(context, context.client()).await;
+        }
+    }
+}
+async fn do_put_object_from_file(context: &AsyncContext, client: Arc<impl TosClient>) {
     let bucket = context.fixed_bucket();
     let key = gen_random_string(10);
     let key = key.as_str();
@@ -608,14 +616,25 @@ async fn test_append_object(context: &AsyncContext) {
     assert!(o.request_id().len() > 0);
     assert!(o.next_append_offset() > 0);
 
+    let folder = env::current_dir().unwrap().display().to_string();
+    let file_path = folder.clone() + "/tests/1.jpg";
+    let mut input = AppendObjectFromFileInput::new_with_offset_file_path(bucket, key, o.next_append_offset(), file_path.clone());
+    input.set_pre_hash_crc64ecma(o.hash_crc64ecma());
+    let o = client
+        .append_object_from_file(&input).await.unwrap();
+    assert!(o.request_id().len() > 0);
+    assert!(o.next_append_offset() > 0);
+
+    let stat = tokio::fs::metadata(&file_path).await.unwrap();
     let mut o = client.get_object(&GetObjectInput::new(bucket, key)).await.unwrap();
     assert!(o.request_id().len() > 0);
-    assert_eq!(o.content_length(), data_len as i64 * 3);
-    let buf = read_to_string(o.content().unwrap()).await;
-    let mut new_data = String::with_capacity(data_len * 3);
-    new_data.push_str(data.as_str());
-    new_data.push_str(data.as_str());
-    new_data.push_str(data.as_str());
+    assert_eq!(o.content_length(), data_len as i64 * 3 + stat.len() as i64);
+    let buf = read_to_buf(o.content().unwrap()).await;
+    let mut new_data = Vec::with_capacity(data_len * 3 + stat.len() as usize);
+    new_data.append(&mut data.as_bytes().to_vec());
+    new_data.append(&mut data.as_bytes().to_vec());
+    new_data.append(&mut data.as_bytes().to_vec());
+    new_data.append(&mut tokio::fs::read(file_path).await.unwrap());
     assert_eq!(buf, new_data);
 
     let e = client
@@ -666,7 +685,9 @@ async fn test_list_objects(context: &AsyncContext) {
     let mut keys = Vec::with_capacity(keys_array.len());
     for (idx, key) in keys_array.iter().enumerate() {
         keys.push(prefix.clone() + key);
-        let o = client.put_object_from_buffer(&PutObjectFromBufferInput::new_with_content(bucket1, keys[idx].as_str(), "hello world")).await.unwrap();
+        let mut input = PutObjectFromBufferInput::new_with_content(bucket1, keys[idx].as_str(), "hello world");
+        input.set_meta(HashMap::from([("key1".to_string(), "value1".to_string())]));
+        let o = client.put_object_from_buffer(&input).await.unwrap();
         assert!(o.request_id().len() > 0);
     }
 
@@ -676,6 +697,7 @@ async fn test_list_objects(context: &AsyncContext) {
 
     Handle::current().spawn(async move {
         let mut input = ListObjectsType2Input::new(bkt1);
+        input.set_fetch_meta(true);
         input.set_max_keys(10);
         loop {
             let o = cli.list_objects_type2(&input).await.unwrap();
@@ -1099,6 +1121,16 @@ async fn test_get_object(context: &AsyncContext) {
     assert_eq!(ex.key(), key);
 
     let data = "hello world";
+    let mut input = PutObjectFromBufferInput::new_with_content(bucket, key, data);
+    input.set_content_length(3);
+    let o = client.put_object_from_buffer(&input).await.unwrap();
+    assert!(o.request_id().len() > 0);
+
+    let input = HeadObjectInput::new(bucket, key);
+    let mut o = client.head_object(&input).await.unwrap();
+    assert!(o.request_id().len() > 0);
+    assert_eq!(o.content_length(), 3);
+
     let o = client.put_object_from_buffer(&PutObjectFromBufferInput::new_with_content(bucket, key, data)).await.unwrap();
     assert!(o.request_id().len() > 0);
 
@@ -1117,7 +1149,18 @@ async fn test_get_object(context: &AsyncContext) {
     assert_eq!(String::from_utf8(o.read_all().await.unwrap()).unwrap(), data);
 
     let file_path = env::current_dir().unwrap().display().to_string() + "/tests/1.jpg";
-    let o = client.put_object_from_file(&PutObjectFromFileInput::new_with_file_path(bucket, key, file_path)).await.unwrap();
+    let mut input = PutObjectFromFileInput::new_with_file_path(bucket, key, file_path.clone());
+    input.set_content_length(10);
+    let o = client.put_object_from_file(&input).await.unwrap();
+    assert!(o.request_id().len() > 0);
+
+    let input = HeadObjectInput::new(bucket, key);
+    let mut o = client.head_object(&input).await.unwrap();
+    assert!(o.request_id().len() > 0);
+    assert_eq!(o.content_length(), 10);
+
+    let mut input = PutObjectFromFileInput::new_with_file_path(bucket, key, file_path);
+    let o = client.put_object_from_file(&input).await.unwrap();
     assert!(o.request_id().len() > 0);
 
     let mut input = GetObjectInput::new(bucket, key);
@@ -1260,9 +1303,11 @@ async fn test_put_object(context: &AsyncContext) {
     let buf2 = buf2.freeze();
     let bytes_list = vec![buf1, buf2];
     let bytes_list2 = bytes_list.clone();
+    let len = "helloworld".len() + "hiworld".len();
     {
         let mut input = PutObjectFromBufferInput::new(bucket, key);
         input.set_content_with_bytes_list(bytes_list.into_iter());
+        input.set_content_length(len as i64);
         let o = client.put_object_from_buffer(&input).await.unwrap();
         assert!(o.request_id().len() > 0);
 

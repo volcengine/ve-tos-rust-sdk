@@ -34,6 +34,7 @@ use ve_tos_rust_sdk::asynchronous::tos;
 use ve_tos_rust_sdk::asynchronous::tos::{AsyncRuntime, TosClient, TosClientImpl};
 use ve_tos_rust_sdk::bucket::{CreateBucketInput, DeleteBucketInput, HeadBucketInput};
 use ve_tos_rust_sdk::credential::{CommonCredentials, CommonCredentialsProvider};
+use ve_tos_rust_sdk::enumeration::AsyncFileUploadReaderMode;
 use ve_tos_rust_sdk::multipart::{AbortMultipartUploadInput, ListMultipartUploadsInput};
 use ve_tos_rust_sdk::object::{DeleteObjectInput, ListObjectsType2Input};
 
@@ -62,10 +63,12 @@ impl AsyncRuntime for TokioRuntime {
     }
 }
 
-type DefaultTosClient = TosClientImpl<CommonCredentialsProvider<CommonCredentials>, CommonCredentials, TokioRuntime>;
+type DefaultTosClient =
+    TosClientImpl<CommonCredentialsProvider<CommonCredentials>, CommonCredentials, TokioRuntime>;
 
 pub struct AsyncContext {
     client: Arc<DefaultTosClient>,
+    client_with_std_file: Arc<DefaultTosClient>,
     https_client: Arc<DefaultTosClient>,
     buckets: Mutex<Vec<String>>,
     fixed_bucket: String,
@@ -89,7 +92,10 @@ impl Default for AsyncContext {
             .user_agent_product_name("test")
             .user_agent_soft_name("soft")
             .user_agent_soft_version("v1")
-            .user_agent_customized_key_values(HashMap::from([("p1".to_string(), "p2".to_string()), ("p3".to_string(), "p4".to_string())]))
+            .user_agent_customized_key_values(HashMap::from([
+                ("p1".to_string(), "p2".to_string()),
+                ("p3".to_string(), "p4".to_string()),
+            ]))
             .ak(ak.clone())
             .sk(sk.clone())
             .region("test-region")
@@ -100,6 +106,30 @@ impl Default for AsyncContext {
             client = client.dns_cache_time(5);
         }
         let client = client.build().unwrap();
+
+        let mut client_with_std_file = tos::builder::<TokioRuntime>()
+            .connection_timeout(3000)
+            .request_timeout(60000)
+            .max_retry_count(0)
+            .control_endpoint(cep.clone())
+            .user_agent_product_name("test")
+            .user_agent_soft_name("soft")
+            .user_agent_soft_version("v1")
+            .user_agent_customized_key_values(HashMap::from([
+                ("p1".to_string(), "p2".to_string()),
+                ("p3".to_string(), "p4".to_string()),
+            ]))
+            .ak(ak.clone())
+            .sk(sk.clone())
+            .region("test-region")
+            .file_upload_reader_mode(AsyncFileUploadReaderMode::StdFile)
+            .endpoint(ep.clone());
+
+        #[cfg(feature = "tokio-runtime")]
+        {
+            client_with_std_file = client_with_std_file.dns_cache_time(5);
+        }
+        let client_with_std_file = client_with_std_file.build().unwrap();
 
         let mut https_client = tos::builder::<TokioRuntime>()
             .connection_timeout(3000)
@@ -119,6 +149,7 @@ impl Default for AsyncContext {
         let https_client = https_client.build().unwrap();
         Self {
             client: Arc::new(client),
+            client_with_std_file: Arc::new(client_with_std_file),
             https_client: Arc::new(https_client),
             buckets: Mutex::new(vec![]),
             fixed_bucket: "".to_string(),
@@ -131,6 +162,9 @@ impl Default for AsyncContext {
 impl AsyncContext {
     pub fn client(&self) -> Arc<impl TosClient> {
         self.client.clone()
+    }
+    pub fn client_with_std_file(&self) -> Arc<impl TosClient> {
+        self.client_with_std_file.clone()
     }
     pub fn https_client(&self) -> Arc<impl TosClient> {
         self.https_client.clone()
@@ -149,8 +183,11 @@ impl AsyncContext {
     }
 
     pub async fn tear_down(&self) {
-        if let Ok(_) = self.released.compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed) {
-            let buckets = self.buckets.lock().await;
+        if let Ok(_) = self
+            .released
+            .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
+        {
+            let buckets = { self.buckets.lock().await.clone() };
             for bucket in buckets.iter() {
                 self.clean_bucket(bucket).await;
             }
@@ -174,7 +211,11 @@ impl AsyncContext {
             match self.client.list_objects_type2(&input).await {
                 Ok(o) => {
                     for content in o.contents() {
-                        if let Err(_) = self.client.delete_object(&DeleteObjectInput::new(bucket, content.key())).await {
+                        if let Err(_) = self
+                            .client
+                            .delete_object(&DeleteObjectInput::new(bucket, content.key()))
+                            .await
+                        {
                             can_delete_bucket = false;
                             break 'outer;
                         }
@@ -199,7 +240,15 @@ impl AsyncContext {
             match self.client.list_multipart_uploads(&input).await {
                 Ok(o) => {
                     for upload in o.uploads() {
-                        if let Err(_) = self.client.abort_multipart_upload(&AbortMultipartUploadInput::new(bucket, upload.key(), upload.upload_id())).await {
+                        if let Err(_) = self
+                            .client
+                            .abort_multipart_upload(&AbortMultipartUploadInput::new(
+                                bucket,
+                                upload.key(),
+                                upload.upload_id(),
+                            ))
+                            .await
+                        {
                             can_delete_bucket = false;
                             break 'outer;
                         }
@@ -220,7 +269,10 @@ impl AsyncContext {
         }
 
         if can_delete_bucket {
-            let _ = self.client.delete_bucket(&DeleteBucketInput::new(bucket)).await;
+            let _ = self
+                .client
+                .delete_bucket(&DeleteBucketInput::new(bucket))
+                .await;
         }
     }
 }
@@ -230,7 +282,11 @@ pub async fn create_async_context() -> AsyncContext {
     let mut non_exists_bucket;
     loop {
         non_exists_bucket = gen_random_string(30);
-        if let Err(_) = ctx.client.head_bucket(&HeadBucketInput::new(non_exists_bucket.clone())).await {
+        if let Err(_) = ctx
+            .client
+            .head_bucket(&HeadBucketInput::new(non_exists_bucket.clone()))
+            .await
+        {
             ctx.non_exists_bucket = non_exists_bucket;
             break;
         }
@@ -239,7 +295,11 @@ pub async fn create_async_context() -> AsyncContext {
     let mut fixed_bucket;
     loop {
         fixed_bucket = gen_random_string(10);
-        match ctx.client.create_bucket(&CreateBucketInput::new(fixed_bucket.clone())).await {
+        match ctx
+            .client
+            .create_bucket(&CreateBucketInput::new(fixed_bucket.clone()))
+            .await
+        {
             Ok(_) => {
                 ctx.fixed_bucket = fixed_bucket;
                 break;
@@ -259,12 +319,15 @@ pub async fn create_async_context() -> AsyncContext {
     ctx
 }
 
-
-pub async fn read_to_string<S: Stream<Item=Result<Bytes, std::io::Error>> + Unpin + ?Sized>(r: &mut S) -> String {
+pub async fn read_to_string<S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + ?Sized>(
+    r: &mut S,
+) -> String {
     String::from_utf8(read_to_buf(r).await).unwrap()
 }
 
-pub async fn read_to_buf<S: Stream<Item=Result<Bytes, std::io::Error>> + Unpin + ?Sized>(r: &mut S) -> Vec<u8> {
+pub async fn read_to_buf<S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + ?Sized>(
+    r: &mut S,
+) -> Vec<u8> {
     let mut buf = Vec::new();
     loop {
         match r.next().await {
@@ -272,6 +335,29 @@ pub async fn read_to_buf<S: Stream<Item=Result<Bytes, std::io::Error>> + Unpin +
             Some(result) => {
                 let x = result.unwrap();
                 buf.extend_from_slice(x.slice(0..x.len()).as_ref());
+            }
+        }
+    }
+}
+
+pub async fn read_to_buf_size<S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin + ?Sized>(
+    r: &mut S,
+    size: usize,
+) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut remaining = size;
+    loop {
+        match r.next().await {
+            None => return buf,
+            Some(result) => {
+                let x = result.unwrap();
+                let end = if remaining >= x.len() {
+                    x.len()
+                } else {
+                    remaining
+                };
+                remaining -= end;
+                buf.extend_from_slice(x.slice(0..end).as_ref());
             }
         }
     }

@@ -35,6 +35,7 @@ pub(crate) const DEFAULT_READ_BUFFER_SIZE: usize = if cfg!(target_os = "espidf")
 pub(crate) const MAX_READ_BUFFER_SIZE_FOR_JSON: usize = 50 * 1024 * 1024;
 pub(crate) const DEFAULT_DIR_MODE: u32 = 0755;
 pub(crate) const DEFAULT_FILE_MODE: u32 = 0644;
+pub(crate) const DEFAULT_FILE_CHUNK_SIZE: usize = 64 * 1024;
 pub(crate) const DEFAULT_UPLOAD_PART_SIZE: i64 = 8 * 1024 * 1024;
 pub(crate) const MAX_UPLOAD_PART_SIZE: i64 = 5 * 1024 * 1024 * 1024;
 pub(crate) const MAX_UPLOAD_PART_NUMBER: i64 = 10000;
@@ -111,7 +112,6 @@ pub(crate) const HEADER_SDK_RETRY_COUNT: &str = "x-sdk-retry-count";
 pub(crate) const HEADER_CONTENT_SHA256: &str = "x-tos-content-sha256";
 pub(crate) const HEADER_NEXT_APPEND_OFFSET: &str = "x-tos-next-append-offset";
 pub(crate) const HEADER_NEXT_MODIFY_OFFSET: &str = "x-tos-next-modify-offset";
-pub(crate) const HEADER_X_IF_MATCH: &str = "x-tos-if-match";
 pub(crate) const HEADER_DIRECTORY: &str = "x-tos-directory";
 pub(crate) const HEADER_ALLOW_SAME_ACTION_OVERLAP: &str = "x-tos-allow-same-action-overlap";
 pub(crate) const HEADER_OBJECT_EXPIRES: &str = "x-tos-object-expires";
@@ -128,6 +128,7 @@ pub(crate) const HEADER_LAST_MODIFIED_NS: &str = "x-tos-last-modified-ns";
 pub(crate) const HEADER_HOST: &str = "Host";
 pub(crate) const HEADER_RANGE: &str = "Range";
 pub(crate) const HEADER_HOST_LOWER: &str = "host";
+pub(crate) const HEADER_TRANSFER_ENCODING_LOWER: &str = "transfer-encoding";
 pub(crate) const HEADER_CONTENT_RANGE: &str = "Content-Range";
 pub(crate) const HEADER_EXPECT: &str = "Expect";
 pub(crate) const HEADER_ETAG: &str = "ETag";
@@ -261,6 +262,7 @@ pub(crate) static NOT_ALLOWED_REQUEST_HEADER: Lazy<HashMap<&str, &str>> = Lazy::
 pub(crate) static ALL_UPLOAD_OPERATIONS: Lazy<HashMap<&str, &str>> = Lazy::new(|| HashMap::from([
     ("AppendObject", ""),
     ("AppendObjectFromBuffer", ""),
+    ("AppendObjectFromFile", ""),
     ("PutObject", ""),
     ("PutObjectFromFile", ""),
     ("PutObjectFromBuffer", ""),
@@ -269,6 +271,7 @@ pub(crate) static ALL_UPLOAD_OPERATIONS: Lazy<HashMap<&str, &str>> = Lazy::new(|
     ("UploadPartFromBuffer", ""),
     ("ModifyObject", ""),
     ("ModifyObjectFromBuffer", ""),
+    ("ModifyObjectFromFile", ""),
 ]));
 
 pub(crate) static NO_IDEMPOTENT_OPERATIONS: Lazy<HashMap<&str, &str>> = Lazy::new(|| HashMap::from([
@@ -295,6 +298,7 @@ pub(crate) static AUTO_RECOGNIZE_CONTENT_TYPE_OPERATIONS: Lazy<HashMap<&str, &st
     ("CreateMultipartUpload", ""),
     ("AppendObject", ""),
     ("AppendObjectFromBuffer", ""),
+    ("AppendObjectFromFile", ""),
     ("PutObject", ""),
     ("PutObjectFromFile", ""),
     ("PutObjectFromBuffer", ""),

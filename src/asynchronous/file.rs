@@ -21,39 +21,59 @@ use crate::asynchronous::reader::StreamAdapter;
 use crate::asynchronous::tos::{AsyncRuntime, TosClientImpl};
 use crate::common::{DataTransferStatus, Meta, RequestInfo, RequestInfoTrait};
 use crate::config::ConfigHolder;
-use crate::constant::{HEADER_CONTENT_LENGTH, HEADER_CONTENT_RANGE, HEADER_RANGE, QUERY_PROCESS, UUID_NODE};
+use crate::constant::{
+    DEFAULT_FILE_CHUNK_SIZE, HEADER_CONTENT_LENGTH, HEADER_CONTENT_RANGE, HEADER_RANGE,
+    HEADER_TRANSFER_ENCODING_LOWER, QUERY_PROCESS, UUID_NODE,
+};
 use crate::credential::Credentials;
+use crate::enumeration::AsyncFileUploadReaderMode;
 use crate::error::{GenericError, TosError};
 use crate::http::HttpRequest;
-use crate::internal::{get_header_value, InputDescriptor, InputTranslator, MockAsyncInputTranslator};
+use crate::internal::{
+    get_header_value, InputDescriptor, InputTranslator, MockAsyncInputTranslator,
+};
 use crate::multipart::UploadPartFromFileInput;
-use crate::object::{GetObjectToFileInput, GetObjectToFileOutput, HeadObjectOutput, PutObjectFromFileInput};
+use crate::object::{
+    AppendObjectFromFileInput, GetObjectToFileInput, GetObjectToFileOutput, HeadObjectOutput,
+    ModifyObjectFromFileInput, PutObjectFromFileInput,
+};
 use crate::reader::MultifunctionalReader;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::Stream;
 use futures_util::StreamExt;
-use std::io::{Error, ErrorKind, SeekFrom};
+use std::fs::File as StdFile;
+use std::future::Future;
+use std::io::{Error, ErrorKind, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::fs;
-use tokio::fs::File;
+use tokio::fs::{self, File as TokioFile};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio::task::JoinHandle;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 pub(crate) struct FileReader {
-    pub(crate) b: ReaderStream<File>,
-    pub(crate) total_size: Option<usize>,
-    pub(crate) read_size: usize,
+    inner: FileReaderInner,
 }
 
-impl FileReader {
-    async fn open(input: &str) -> Result<(File, Option<usize>), TosError> {
-        match File::open(input).await {
+pub(crate) enum FileReaderInner {
+    TokioReaderStream(TokioReaderStreamFileReader),
+    BlockingStdFile(BlockingStdFileReader),
+}
+
+pub(crate) struct TokioReaderStreamFileReader {
+    b: ReaderStream<TokioFile>,
+    total_size: Option<usize>,
+    read_size: usize,
+}
+
+impl TokioReaderStreamFileReader {
+    async fn open(input: &str) -> Result<(TokioFile, Option<usize>), TosError> {
+        match TokioFile::open(input).await {
             Ok(fd) => {
                 if let Ok(x) = fd.metadata().await {
                     let len = x.len() as usize;
@@ -61,39 +81,77 @@ impl FileReader {
                 }
                 Ok((fd, None))
             }
-            Err(e) => Err(TosError::client_error_with_cause("open file error", GenericError::IoError(e.to_string()))),
+            Err(e) => Err(TosError::client_error_with_cause(
+                "open file error",
+                GenericError::IoError(e.to_string()),
+            )),
         }
+    }
+
+    async fn new(input: &str) -> Result<(Self, Option<usize>), TosError> {
+        let (fd, len) = Self::open(input).await?;
+        Ok((
+            Self {
+                b: ReaderStream::with_capacity(fd, DEFAULT_FILE_CHUNK_SIZE),
+                total_size: len,
+                read_size: 0,
+            },
+            len,
+        ))
+    }
+
+    async fn new_with_offset(input: &str, offset: i64) -> Result<(Self, Option<usize>), TosError> {
+        let (mut fd, len) = Self::open(input).await?;
+        validate_file_offset(offset, len)?;
+        if offset > 0 {
+            if let Err(e) = fd.seek(SeekFrom::Start(offset as u64)).await {
+                return Err(TosError::client_error_with_cause(
+                    "seek file error",
+                    GenericError::IoError(e.to_string()),
+                ));
+            }
+        }
+        let total_size = len.map(|file_size| file_size - offset as usize);
+        Ok((
+            Self {
+                b: ReaderStream::with_capacity(fd, DEFAULT_FILE_CHUNK_SIZE),
+                total_size,
+                read_size: 0,
+            },
+            len,
+        ))
     }
 }
 
-impl Stream for FileReader
-{
+impl Stream for TokioReaderStreamFileReader {
     type Item = Result<Bytes, crate::error::CommonError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.b.poll_next_unpin(cx) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(opt) => {
-                match opt {
-                    None => {
-                        if let Some(total_size) = self.total_size {
-                            if self.read_size < total_size {
-                                return Poll::Ready(Some(Err(Error::new(ErrorKind::UnexpectedEof, format!("premature end, expected {}, actual {}", total_size, self.read_size)))));
-                            }
-                        }
-                        Poll::Ready(None)
-                    }
-                    Some(result) => {
-                        match result {
-                            Err(e) => Poll::Ready(Some(Err(Error::new(ErrorKind::Other, e.to_string())))),
-                            Ok(x) => {
-                                self.read_size += x.len();
-                                Poll::Ready(Some(Ok(x)))
-                            }
+            Poll::Ready(opt) => match opt {
+                None => {
+                    if let Some(total_size) = self.total_size {
+                        if self.read_size < total_size {
+                            return Poll::Ready(Some(Err(Error::new(
+                                ErrorKind::UnexpectedEof,
+                                format!(
+                                    "premature end, expected {}, actual {}",
+                                    total_size, self.read_size
+                                ),
+                            ))));
                         }
                     }
+                    Poll::Ready(None)
                 }
-            }
+                Some(result) => match result {
+                    Err(e) => Poll::Ready(Some(Err(Error::new(ErrorKind::Other, e.to_string())))),
+                    Ok(x) => {
+                        self.read_size += x.len();
+                        Poll::Ready(Some(Ok(x)))
+                    }
+                },
+            },
         }
     }
 
@@ -102,26 +160,306 @@ impl Stream for FileReader
     }
 }
 
-#[async_trait]
-pub(crate) trait BuildFileStream: Sized {
-    async fn new(input: &str) -> Result<(Self, Option<usize>), TosError>;
-    async fn new_with_offset(input: &str, offset: i64) -> Result<(Self, Option<usize>), TosError>;
+pub(crate) struct BlockingStdFileReader {
+    state: BlockingStdFileReaderState,
+    total_size: Option<usize>,
+    read_size: usize,
 }
-#[async_trait]
-impl BuildFileStream for FileReader {
+
+enum BlockingStdFileReaderState {
+    Idle(Option<StdFile>),
+    Reading(JoinHandle<std::io::Result<(StdFile, Bytes, usize)>>),
+    Done,
+}
+
+impl BlockingStdFileReader {
+    fn open_blocking(input: &str) -> Result<(StdFile, Option<usize>), TosError> {
+        match StdFile::open(input) {
+            Ok(fd) => {
+                if let Ok(x) = fd.metadata() {
+                    let len = x.len() as usize;
+                    return Ok((fd, Some(len)));
+                }
+                Ok((fd, None))
+            }
+            Err(e) => Err(TosError::client_error_with_cause(
+                "open file error",
+                GenericError::IoError(e.to_string()),
+            )),
+        }
+    }
+
     async fn new(input: &str) -> Result<(Self, Option<usize>), TosError> {
-        let (fd, len) = Self::open(input).await?;
-        Ok((Self { b: ReaderStream::new(fd), total_size: len, read_size: 0 }, len))
+        let input = input.to_string();
+        let (fd, len) = tokio::task::spawn_blocking(move || Self::open_blocking(&input))
+            .await
+            .map_err(|e| {
+                TosError::client_error_with_cause(
+                    "open file task join error",
+                    GenericError::DefaultError(e.to_string()),
+                )
+            })??;
+        Ok((
+            Self {
+                state: BlockingStdFileReaderState::Idle(Some(fd)),
+                total_size: len,
+                read_size: 0,
+            },
+            len,
+        ))
     }
 
     async fn new_with_offset(input: &str, offset: i64) -> Result<(Self, Option<usize>), TosError> {
-        let (mut fd, len) = Self::open(input).await?;
-        if offset > 0 {
-            if let Err(e) = fd.seek(SeekFrom::Start(offset as u64)).await {
-                return Err(TosError::client_error_with_cause("seek file error", GenericError::IoError(e.to_string())));
+        let input = input.to_string();
+        let (fd, len, total_size) = tokio::task::spawn_blocking(move || {
+            let (mut fd, len) = Self::open_blocking(&input)?;
+            validate_file_offset(offset, len)?;
+            if offset > 0 {
+                if let Err(e) = fd.seek(SeekFrom::Start(offset as u64)) {
+                    return Err(TosError::client_error_with_cause(
+                        "seek file error",
+                        GenericError::IoError(e.to_string()),
+                    ));
+                }
+            }
+            let total_size = len.map(|file_size| file_size - offset as usize);
+            Ok((fd, len, total_size))
+        })
+        .await
+        .map_err(|e| {
+            TosError::client_error_with_cause(
+                "open file task join error",
+                GenericError::DefaultError(e.to_string()),
+            )
+        })??;
+        Ok((
+            Self {
+                state: BlockingStdFileReaderState::Idle(Some(fd)),
+                total_size,
+                read_size: 0,
+            },
+            len,
+        ))
+    }
+
+    fn next_read_limit(&self) -> Option<usize> {
+        let read_limit = match self.total_size {
+            Some(total_size) if self.read_size >= total_size => return None,
+            Some(total_size) => DEFAULT_FILE_CHUNK_SIZE.min(total_size - self.read_size),
+            None => DEFAULT_FILE_CHUNK_SIZE,
+        };
+        Some(read_limit)
+    }
+
+    fn premature_eof_error(&self) -> Option<Error> {
+        if let Some(total_size) = self.total_size {
+            if self.read_size < total_size {
+                return Some(Error::new(
+                    ErrorKind::UnexpectedEof,
+                    format!(
+                        "premature end, expected {}, actual {}",
+                        total_size, self.read_size
+                    ),
+                ));
             }
         }
-        Ok((Self { b: ReaderStream::new(fd), total_size: len, read_size: 0 }, len))
+        None
+    }
+}
+
+impl Stream for BlockingStdFileReader {
+    type Item = Result<Bytes, crate::error::CommonError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            let state = std::mem::replace(&mut self.state, BlockingStdFileReaderState::Done);
+            match state {
+                BlockingStdFileReaderState::Done => return Poll::Ready(None),
+                BlockingStdFileReaderState::Idle(file) => {
+                    let read_limit = match self.next_read_limit() {
+                        None => return Poll::Ready(None),
+                        Some(read_limit) => read_limit,
+                    };
+                    let mut fd = file.expect("file reader state must contain an open file");
+                    self.state = BlockingStdFileReaderState::Reading(tokio::task::spawn_blocking(
+                        move || {
+                            let mut buf = vec![0u8; read_limit];
+                            let mut filled = 0;
+                            while filled < read_limit {
+                                match fd.read(&mut buf[filled..]) {
+                                    Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                                    Err(e) => return Err(e),
+                                    Ok(0) => break, // EOF
+                                    Ok(n) => filled += n,
+                                }
+                            }
+                            buf.truncate(filled);
+                            Ok((fd, Bytes::from(buf), filled))
+                        },
+                    ));
+                    // loop 自然迭代进入 Reading 分支，poll JoinHandle 以注册 waker
+                }
+                BlockingStdFileReaderState::Reading(mut handle) => {
+                    match Pin::new(&mut handle).poll(cx) {
+                        Poll::Pending => {
+                            self.state = BlockingStdFileReaderState::Reading(handle);
+                            return Poll::Pending;
+                        }
+                        Poll::Ready(join_result) => match join_result {
+                            Ok(Ok((fd, bytes, read_once))) => {
+                                self.state = BlockingStdFileReaderState::Idle(Some(fd));
+                                if read_once == 0 {
+                                    self.state = BlockingStdFileReaderState::Done;
+                                    if let Some(e) = self.premature_eof_error() {
+                                        return Poll::Ready(Some(Err(e)));
+                                    }
+                                    return Poll::Ready(None);
+                                }
+                                self.read_size += read_once;
+                                return Poll::Ready(Some(Ok(bytes)));
+                            }
+                            Ok(Err(e)) => {
+                                self.state = BlockingStdFileReaderState::Done;
+                                return Poll::Ready(Some(Err(Error::new(
+                                    ErrorKind::Other,
+                                    e.to_string(),
+                                ))));
+                            }
+                            Err(e) => {
+                                self.state = BlockingStdFileReaderState::Done;
+                                return Poll::Ready(Some(Err(Error::new(
+                                    ErrorKind::Other,
+                                    e.to_string(),
+                                ))));
+                            }
+                        },
+                    }
+                }
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        file_stream_size_hint(self.total_size, self.read_size)
+    }
+}
+
+impl Stream for FileReader {
+    type Item = Result<Bytes, crate::error::CommonError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match &mut self.inner {
+            FileReaderInner::TokioReaderStream(reader) => Pin::new(reader).poll_next(cx),
+            FileReaderInner::BlockingStdFile(reader) => Pin::new(reader).poll_next(cx),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match &self.inner {
+            FileReaderInner::TokioReaderStream(reader) => reader.size_hint(),
+            FileReaderInner::BlockingStdFile(reader) => reader.size_hint(),
+        }
+    }
+}
+
+fn validate_file_offset(offset: i64, len: Option<usize>) -> Result<(), TosError> {
+    // [Review Fix #1] 在文件流构造层兜底校验 offset，避免绕过上层校验时产生错误 seek 或长度下溢。
+    if offset < 0 {
+        return Err(TosError::client_error("invalid offset for file stream"));
+    }
+    if let Some(file_size) = len {
+        if offset as usize > file_size {
+            return Err(TosError::client_error("offset exceeds file size"));
+        }
+    }
+    Ok(())
+}
+
+fn file_stream_size_hint(total_size: Option<usize>, read_size: usize) -> (usize, Option<usize>) {
+    match total_size {
+        Some(total_size) => {
+            let remaining = total_size.saturating_sub(read_size);
+            let upper = (remaining + DEFAULT_FILE_CHUNK_SIZE - 1) / DEFAULT_FILE_CHUNK_SIZE;
+            // lower: 还有剩余数据时至少还会产出 1 个 item
+            let lower = if remaining > 0 { 1 } else { 0 };
+            (lower, Some(upper))
+        }
+        None => (0, None),
+    }
+}
+
+#[async_trait]
+pub(crate) trait BuildFileStream: Sized {
+    async fn new(input: &str) -> Result<(Self, Option<usize>), TosError> {
+        Self::new_with_mode(input, AsyncFileUploadReaderMode::default()).await
+    }
+    async fn new_with_offset(input: &str, offset: i64) -> Result<(Self, Option<usize>), TosError> {
+        Self::new_with_offset_and_mode(input, offset, AsyncFileUploadReaderMode::default()).await
+    }
+    async fn new_with_mode(
+        input: &str,
+        mode: AsyncFileUploadReaderMode,
+    ) -> Result<(Self, Option<usize>), TosError>;
+    async fn new_with_offset_and_mode(
+        input: &str,
+        offset: i64,
+        mode: AsyncFileUploadReaderMode,
+    ) -> Result<(Self, Option<usize>), TosError>;
+}
+#[async_trait]
+impl BuildFileStream for FileReader {
+    async fn new_with_mode(
+        input: &str,
+        mode: AsyncFileUploadReaderMode,
+    ) -> Result<(Self, Option<usize>), TosError> {
+        match mode {
+            AsyncFileUploadReaderMode::TokioFile => {
+                let (reader, len) = TokioReaderStreamFileReader::new(input).await?;
+                Ok((
+                    Self {
+                        inner: FileReaderInner::TokioReaderStream(reader),
+                    },
+                    len,
+                ))
+            }
+            AsyncFileUploadReaderMode::StdFile => {
+                let (reader, len) = BlockingStdFileReader::new(input).await?;
+                Ok((
+                    Self {
+                        inner: FileReaderInner::BlockingStdFile(reader),
+                    },
+                    len,
+                ))
+            }
+        }
+    }
+
+    async fn new_with_offset_and_mode(
+        input: &str,
+        offset: i64,
+        mode: AsyncFileUploadReaderMode,
+    ) -> Result<(Self, Option<usize>), TosError> {
+        match mode {
+            AsyncFileUploadReaderMode::TokioFile => {
+                let (reader, len) =
+                    TokioReaderStreamFileReader::new_with_offset(input, offset).await?;
+                Ok((
+                    Self {
+                        inner: FileReaderInner::TokioReaderStream(reader),
+                    },
+                    len,
+                ))
+            }
+            AsyncFileUploadReaderMode::StdFile => {
+                let (reader, len) = BlockingStdFileReader::new_with_offset(input, offset).await?;
+                Ok((
+                    Self {
+                        inner: FileReaderInner::BlockingStdFile(reader),
+                    },
+                    len,
+                ))
+            }
+        }
     }
 }
 
@@ -135,12 +473,12 @@ where
     where
         F: AsyncInputTranslator<B>,
         K: OutputParser + RequestInfoTrait + Send,
-        B: Stream<Item=Result<Bytes, crate::error::CommonError>> + Send + Unpin + 'static,
+        B: Stream<Item = Result<Bytes, crate::error::CommonError>> + Send + Unpin + 'static,
     {
-        self.do_request_common::<MockAsyncInputTranslator, F, K, B>(None, Some(input)).await
+        self.do_request_common::<MockAsyncInputTranslator, F, K, B>(None, Some(input))
+            .await
     }
 }
-
 
 #[async_trait]
 impl<B> AsyncInputTranslator<B> for PutObjectFromFileInput
@@ -148,13 +486,66 @@ where
     B: BuildFileStream + Send,
 {
     async fn trans(&self, config_holder: Arc<ConfigHolder>) -> Result<HttpRequest<B>, TosError> {
+        let mode = config_holder.async_file_upload_reader_mode;
         let mut request = self.inner.trans(config_holder)?;
         request.operation = self.operation();
         if self.file_path != "" {
-            let (body, len) = B::new(&self.file_path).await?;
+            let (body, len) = B::new_with_mode(&self.file_path, mode).await?;
             request.body = Some(body);
             if let Some(l) = len {
                 if self.inner.content_length < 0 {
+                    request.header.insert(HEADER_CONTENT_LENGTH, l.to_string());
+                }
+            }
+        }
+        Ok(request)
+    }
+}
+
+#[async_trait]
+impl<B> AsyncInputTranslator<B> for AppendObjectFromFileInput
+where
+    B: BuildFileStream + Send,
+{
+    async fn trans(&self, config_holder: Arc<ConfigHolder>) -> Result<HttpRequest<B>, TosError> {
+        let mode = config_holder.async_file_upload_reader_mode;
+        let mut request = self.inner.trans(config_holder)?;
+        request.operation = self.operation();
+        if self.file_path != "" {
+            let (body, len) = B::new_with_mode(&self.file_path, mode).await?;
+            request.body = Some(body);
+            if let Some(l) = len {
+                if self.inner.content_length < 0 {
+                    request.header.insert(HEADER_CONTENT_LENGTH, l.to_string());
+                }
+            }
+        }
+        Ok(request)
+    }
+}
+
+#[async_trait]
+impl<B> AsyncInputTranslator<B> for ModifyObjectFromFileInput
+where
+    B: BuildFileStream + Send,
+{
+    async fn trans(&self, config_holder: Arc<ConfigHolder>) -> Result<HttpRequest<B>, TosError> {
+        let mode = config_holder.async_file_upload_reader_mode;
+        let mut request = HttpRequest::default();
+        request.operation = self.operation();
+        request.bucket = self.bucket().trim();
+        request.key = self.key();
+
+        let (method, request_context, header, query) = self.inner_trans()?;
+        request.method = method;
+        request.request_context = request_context;
+        request.header = header;
+        request.query = query;
+        if self.file_path != "" {
+            let (body, len) = B::new_with_mode(&self.file_path, mode).await?;
+            request.body = Some(body);
+            if let Some(l) = len {
+                if self.content_length < 0 {
                     request.header.insert(HEADER_CONTENT_LENGTH, l.to_string());
                 }
             }
@@ -169,20 +560,31 @@ where
     B: BuildFileStream + Send,
 {
     async fn trans(&self, config_holder: Arc<ConfigHolder>) -> Result<HttpRequest<B>, TosError> {
+        let mode = config_holder.async_file_upload_reader_mode;
         let mut request = self.inner.trans(config_holder)?;
         request.operation = self.operation();
         if self.offset < 0 {
             return Err(TosError::client_error("invalid offset for upload part"));
         }
         if self.part_size >= 0 {
-            request.header.insert(HEADER_CONTENT_LENGTH, self.part_size.to_string());
+            request
+                .header
+                .insert(HEADER_CONTENT_LENGTH, self.part_size.to_string());
         }
         if self.file_path != "" {
-            let (body, len) = B::new_with_offset(&self.file_path, self.offset).await?;
+            let (body, len) =
+                B::new_with_offset_and_mode(&self.file_path, self.offset, mode).await?;
             request.body = Some(body);
             if let Some(l) = len {
                 if self.part_size < 0 {
-                    request.header.insert(HEADER_CONTENT_LENGTH, (l - self.offset as usize).to_string());
+                    // [Review Fix #2] 自定义 BuildFileStream 返回原始文件长度时仍需防御 offset 越界，避免 usize 下溢。
+                    if self.offset as usize > l {
+                        return Err(TosError::client_error("offset exceeds file size"));
+                    }
+                    request.header.insert(
+                        HEADER_CONTENT_LENGTH,
+                        (l - self.offset as usize).to_string(),
+                    );
                 }
             }
         }
@@ -192,24 +594,49 @@ where
 
 #[async_trait]
 impl OutputParser for GetObjectToFileOutput {
-    async fn parse<B>(request: HttpRequest<'_, B>, response: HttpResponse, request_info: RequestInfo, meta: Meta) -> Result<Self, TosError>
+    async fn parse<B>(
+        request: HttpRequest<'_, B>,
+        response: HttpResponse,
+        request_info: RequestInfo,
+        meta: Meta,
+    ) -> Result<Self, TosError>
     where
         B: Send,
     {
-        let head_object_output = HeadObjectOutput::parse_by_header(response.headers(), request_info, meta)?;
+        let transfer_encoding = request_info
+            .header
+            .get(HEADER_TRANSFER_ENCODING_LOWER)
+            .map(|x| x.to_string());
+        let head_object_output =
+            HeadObjectOutput::parse_by_header(response.headers(), request_info, meta)?;
         let content_range = get_header_value(response.headers(), HEADER_CONTENT_RANGE);
-        let content = Box::new(StreamAdapter::new(response.bytes_stream())) as Box<dyn Stream<Item=Result<Bytes, crate::error::CommonError>> + Send + Unpin>;
+        let content = Box::new(StreamAdapter::new(response.bytes_stream()))
+            as Box<dyn Stream<Item = Result<Bytes, crate::error::CommonError>> + Send + Unpin>;
         let mut target_crc64 = None;
-        if request.enable_crc && !request.header.contains_key(HEADER_RANGE) &&
-            (request.query.is_none() || !request.query.as_ref().unwrap().contains_key(QUERY_PROCESS)) {
-            target_crc64 = Some(head_object_output.hash_crc64ecma);
+        if request.enable_crc
+            && !request.header.contains_key(HEADER_RANGE)
+            && (request.query.is_none()
+                || !request.query.as_ref().unwrap().contains_key(QUERY_PROCESS))
+        {
+            if let Some(te) = transfer_encoding {
+                if te != "chunked" {
+                    target_crc64 = Some(head_object_output.hash_crc64ecma);
+                }
+            } else {
+                target_crc64 = Some(head_object_output.hash_crc64ecma);
+            }
         }
         let mut crc64 = None;
         if target_crc64.is_some() {
             crc64 = Some(Arc::new(AtomicU64::new(0)));
         }
-        let mut reader = MultifunctionalReader::with_target_crc64(content, crc64, head_object_output.content_length,
-                                                                  &request, target_crc64);
+        let mut reader = MultifunctionalReader::with_target_crc64(
+            content,
+            crc64,
+            head_object_output.content_length,
+            &request,
+            target_crc64,
+        );
         if let Some(ref rc) = request.request_context {
             if let Some(ref rl) = rc.rate_limiter {
                 reader.set_rate_limiter(rl.clone());
@@ -226,12 +653,19 @@ impl OutputParser for GetObjectToFileOutput {
         let file_path = &request.request_context.as_ref().unwrap().file_path;
         let path = Path::new(file_path);
         match path.parent() {
-            None => return Err(TosError::client_error(format!("cannot get parent for path {}", file_path))),
+            None => {
+                return Err(TosError::client_error(format!(
+                    "cannot get parent for path {}",
+                    file_path
+                )))
+            }
             Some(p) => {
                 if !p.exists() {
                     if let Err(e) = fs::create_dir_all(p).await {
-                        return Err(TosError::client_error_with_cause(format!("create dir for parent {} error", p.display()),
-                                                                     GenericError::IoError(e.to_string())));
+                        return Err(TosError::client_error_with_cause(
+                            format!("create dir for parent {} error", p.display()),
+                            GenericError::IoError(e.to_string()),
+                        ));
                     }
                 }
             }
@@ -243,37 +677,54 @@ impl OutputParser for GetObjectToFileOutput {
             final_file_path = path.to_path_buf();
         }
 
-        let temp_file_path = final_file_path.parent().unwrap().join(Uuid::now_v1(&UUID_NODE).to_string());
-        match File::options().write(true).truncate(true).create(true).open(temp_file_path.clone()).await {
+        let temp_file_path = final_file_path
+            .parent()
+            .unwrap()
+            .join(Uuid::now_v1(&UUID_NODE).to_string());
+        match TokioFile::options()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(temp_file_path.clone())
+            .await
+        {
             Err(e) => {
-                return Err(TosError::client_error_with_cause("open file to write error", GenericError::IoError(e.to_string())))
+                return Err(TosError::client_error_with_cause(
+                    "open file to write error",
+                    GenericError::IoError(e.to_string()),
+                ))
             }
-            Ok(mut fd) => {
-                loop {
-                    match reader.next().await {
-                        None => break,
-                        Some(result) => {
-                            match result {
-                                Err(re) => {
-                                    let _ = fs::remove_file(temp_file_path).await;
-                                    return Err(TosError::client_error_with_cause("read content to write error", GenericError::IoError(re.to_string())));
-                                }
-                                Ok(data) => {
-                                    if let Err(we) = fd.write_all(data.as_ref()).await {
-                                        let _ = fs::remove_file(temp_file_path).await;
-                                        return Err(TosError::client_error_with_cause("write data to file error", GenericError::IoError(we.to_string())));
-                                    }
-                                }
+            Ok(mut fd) => loop {
+                match reader.next().await {
+                    None => break,
+                    Some(result) => match result {
+                        Err(re) => {
+                            let _ = fs::remove_file(temp_file_path).await;
+                            return Err(TosError::client_error_with_cause(
+                                "read content to write error",
+                                GenericError::IoError(re.to_string()),
+                            ));
+                        }
+                        Ok(data) => {
+                            if let Err(we) = fd.write_all(data.as_ref()).await {
+                                let _ = fs::remove_file(temp_file_path).await;
+                                return Err(TosError::client_error_with_cause(
+                                    "write data to file error",
+                                    GenericError::IoError(we.to_string()),
+                                ));
                             }
                         }
-                    }
+                    },
                 }
-            }
+            },
         }
 
         if let Err(re) = fs::rename(temp_file_path.clone(), final_file_path).await {
             let _ = fs::remove_file(temp_file_path).await;
-            return Err(TosError::client_error_with_cause("rename file error", GenericError::IoError(re.to_string())));
+            return Err(TosError::client_error_with_cause(
+                "rename file error",
+                GenericError::IoError(re.to_string()),
+            ));
         }
 
         Ok(Self {
@@ -288,8 +739,37 @@ impl DataTransferListener for PutObjectFromFileInput {
         &self.inner.async_data_transfer_listener
     }
 
-    fn set_async_data_transfer_listener(&mut self, listener: impl Into<async_channel::Sender<DataTransferStatus>>) {
+    fn set_async_data_transfer_listener(
+        &mut self,
+        listener: impl Into<async_channel::Sender<DataTransferStatus>>,
+    ) {
         self.inner.async_data_transfer_listener = Some(listener.into());
+    }
+}
+
+impl DataTransferListener for AppendObjectFromFileInput {
+    fn async_data_transfer_listener(&self) -> &Option<async_channel::Sender<DataTransferStatus>> {
+        &self.inner.async_data_transfer_listener
+    }
+
+    fn set_async_data_transfer_listener(
+        &mut self,
+        listener: impl Into<async_channel::Sender<DataTransferStatus>>,
+    ) {
+        self.inner.async_data_transfer_listener = Some(listener.into());
+    }
+}
+
+impl DataTransferListener for ModifyObjectFromFileInput {
+    fn async_data_transfer_listener(&self) -> &Option<async_channel::Sender<DataTransferStatus>> {
+        &self.async_data_transfer_listener
+    }
+
+    fn set_async_data_transfer_listener(
+        &mut self,
+        listener: impl Into<async_channel::Sender<DataTransferStatus>>,
+    ) {
+        self.async_data_transfer_listener = Some(listener.into());
     }
 }
 
@@ -298,7 +778,10 @@ impl DataTransferListener for GetObjectToFileInput {
         &self.inner.async_data_transfer_listener
     }
 
-    fn set_async_data_transfer_listener(&mut self, listener: impl Into<async_channel::Sender<DataTransferStatus>>) {
+    fn set_async_data_transfer_listener(
+        &mut self,
+        listener: impl Into<async_channel::Sender<DataTransferStatus>>,
+    ) {
         self.inner.async_data_transfer_listener = Some(listener.into());
     }
 }
@@ -308,7 +791,10 @@ impl DataTransferListener for UploadPartFromFileInput {
         &self.inner.async_data_transfer_listener
     }
 
-    fn set_async_data_transfer_listener(&mut self, listener: impl Into<async_channel::Sender<DataTransferStatus>>) {
+    fn set_async_data_transfer_listener(
+        &mut self,
+        listener: impl Into<async_channel::Sender<DataTransferStatus>>,
+    ) {
         self.inner.async_data_transfer_listener = Some(listener.into());
     }
 }

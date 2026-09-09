@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use crate::constant::{HEADER_COPY_SOURCE_VERSION_ID, HEADER_LAST_MODIFIED, HEADER_NEXT_APPEND_OFFSET, HEADER_NEXT_MODIFY_OFFSET, HEADER_RANGE, HEADER_SYMLINK_BUCKET, HEADER_SYMLINK_TARGET, QUERY_PROCESS};
+use crate::constant::{HEADER_COPY_SOURCE_VERSION_ID, HEADER_LAST_MODIFIED, HEADER_NEXT_APPEND_OFFSET, HEADER_NEXT_MODIFY_OFFSET, HEADER_RANGE, HEADER_SYMLINK_BUCKET, HEADER_SYMLINK_TARGET, HEADER_TRANSFER_ENCODING_LOWER, QUERY_PROCESS};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
@@ -51,6 +51,8 @@ pub trait ObjectAPI {
     where
         B: Stream<Item=Result<Bytes, crate::error::CommonError>> + Send + Sync + Unpin + 'static;
     async fn append_object_from_buffer(&self, input: &AppendObjectFromBufferInput) -> Result<AppendObjectOutput, TosError>;
+    #[cfg(feature = "tokio-runtime")]
+    async fn append_object_from_file(&self, input: &crate::object::AppendObjectFromFileInput) -> Result<AppendObjectOutput, TosError>;
     async fn get_object(&self, input: &GetObjectInput) -> Result<GetObjectOutput, TosError>;
     #[cfg(feature = "tokio-runtime")]
     async fn get_object_to_file(&self, input: &crate::object::GetObjectToFileInput) -> Result<crate::object::GetObjectToFileOutput, TosError>;
@@ -125,7 +127,12 @@ impl OutputParser for ListObjectsType2Output {
             if let Some(x) = content.user_meta.take() {
                 let mut meta = HashMap::with_capacity(x.len());
                 for item in x {
-                    if let Ok(dk) = urlencoding::decode(&item.key[HEADER_PREFIX_META.len()..]) {
+                    let key = if item.key.starts_with(HEADER_PREFIX_META) {
+                        &item.key[HEADER_PREFIX_META.len()..]
+                    } else {
+                        &item.key
+                    };
+                    if let Ok(dk) = urlencoding::decode(key) {
                         if let Ok(dv) = urlencoding::decode(item.value.as_str()) {
                             meta.insert(dk.to_string(), dv.to_string());
                         }
@@ -152,13 +159,20 @@ impl OutputParser for GetObjectOutput {
     where
         B: Send,
     {
+        let transfer_encoding = request_info.header.get(HEADER_TRANSFER_ENCODING_LOWER).map(|x| x.to_string());
         let head_object_output = HeadObjectOutput::parse_by_header(response.headers(), request_info, meta)?;
         let content_range = get_header_value(response.headers(), HEADER_CONTENT_RANGE);
         let content = Box::new(StreamAdapter::new(response.bytes_stream())) as Box<dyn Stream<Item=Result<Bytes, crate::error::CommonError>> + Send + Unpin>;
         let mut target_crc64 = None;
         if request.enable_crc && !request.header.contains_key(HEADER_RANGE) &&
             (request.query.is_none() || !request.query.as_ref().unwrap().contains_key(QUERY_PROCESS)) {
-            target_crc64 = Some(head_object_output.hash_crc64ecma);
+            if let Some(te) = transfer_encoding {
+                if te != "chunked" {
+                    target_crc64 = Some(head_object_output.hash_crc64ecma);
+                }
+            } else {
+                target_crc64 = Some(head_object_output.hash_crc64ecma);
+            }
         }
         let mut crc64 = None;
         if target_crc64.is_some() {
@@ -203,7 +217,7 @@ impl Stream for GetObjectOutput {
 }
 #[async_trait]
 impl ObjectContent for GetObjectOutput {
-    type Content = (dyn Stream<Item=Result<Bytes, crate::error::CommonError>> + Unpin);
+    type Content = dyn Stream<Item=Result<Bytes, crate::error::CommonError>> + Unpin;
 
     fn content(&mut self) -> Option<&mut Self::Content> {
         match self.async_content.as_mut() {
@@ -358,7 +372,12 @@ impl OutputParser for ListObjectVersionsOutput {
             if let Some(x) = version.user_meta.take() {
                 let mut meta = HashMap::with_capacity(x.len());
                 for item in x {
-                    if let Ok(dk) = urlencoding::decode(&item.key[HEADER_PREFIX_META.len()..]) {
+                    let key = if item.key.starts_with(HEADER_PREFIX_META) {
+                        &item.key[HEADER_PREFIX_META.len()..]
+                    } else {
+                        &item.key
+                    };
+                    if let Ok(dk) = urlencoding::decode(key) {
                         if let Ok(dv) = urlencoding::decode(item.value.as_str()) {
                             meta.insert(dk.to_string(), dv.to_string());
                         }

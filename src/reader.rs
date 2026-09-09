@@ -343,18 +343,25 @@ where
                 self.send_data_transfer_status(DataTransferType::DataTransferFailed, -1);
                 Err(e)
             }
-            Ok(read_once) => {
-                self.read_size += read_once;
+            Ok(mut read_once) => {
                 if read_once > 0 {
-                    self.send_data_transfer_status(DataTransferType::DataTransferRW, read_once as i64);
                     if let Some(total_size) = self.total_size {
-                        if self.read_size == total_size {
-                            if !self.succeed_send {
-                                self.succeed_send = true;
-                                self.send_data_transfer_status(DataTransferType::DataTransferSucceed, -1);
+                        if self.read_size + read_once > total_size {
+                            read_once -= self.read_size + read_once - total_size;
+                        }
+                        self.read_size += read_once;
+                        if let Some(total_size) = self.total_size {
+                            if self.read_size == total_size {
+                                if !self.succeed_send {
+                                    self.succeed_send = true;
+                                    self.send_data_transfer_status(DataTransferType::DataTransferSucceed, -1);
+                                }
                             }
                         }
+                    } else {
+                        self.read_size += read_once;
                     }
+                    self.send_data_transfer_status(DataTransferType::DataTransferRW, read_once as i64);
                 } else if read_once == 0 {
                     if let Some(total_size) = self.total_size {
                         if self.read_size < total_size {
@@ -396,6 +403,9 @@ pub(crate) struct MultifunctionalReader<B> {
     pub(crate) crc64: Option<Arc<AtomicU64>>,
     pub(crate) init_crc64: Option<u64>,
     pub(crate) target_crc64: Option<u64>,
+    pub(crate) pending_bytes: Option<Bytes>,
+    pub(crate) pending_read_end: bool,
+    pub(crate) acquire_count: isize,
 }
 
 pub(crate) struct AsyncSendContext {
@@ -429,6 +439,9 @@ impl<B> MultifunctionalReader<B> {
             crc64,
             init_crc64: None,
             target_crc64,
+            pending_bytes: None,
+            pending_read_end: false,
+            acquire_count: 0,
         }
     }
 
