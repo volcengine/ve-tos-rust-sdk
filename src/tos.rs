@@ -30,7 +30,7 @@ use arc_swap::ArcSwap;
 use bytes::Bytes;
 use reqwest::blocking::{Body, Client, RequestBuilder};
 use reqwest::{redirect, Proxy};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs::File;
 use std::io::{Cursor, Read};
@@ -311,6 +311,10 @@ where
 
     pub fn follow_redirect_times(mut self, follow_redirect_times: isize) -> Self {
         self.config_holder.follow_redirect_times = follow_redirect_times;
+        self
+    }
+    pub fn retryable_409_ecs(mut self, retryable_409_ecs: HashSet<String>) -> Self {
+        self.config_holder.retryable_409_ecs = retryable_409_ecs;
         self
     }
     #[cfg(any(feature = "use-native-tls", feature = "use-rustls"))]
@@ -623,6 +627,7 @@ where
             client_key: c.client_key.clone(),
             ca_crt: c.ca_crt.clone(),
             async_file_upload_reader_mode: c.async_file_upload_reader_mode,
+            retryable_409_ecs: c.retryable_409_ecs.clone(),
             user_agent: c.user_agent.clone(),
             region: "".to_string(),
             schema: "".to_string(),
@@ -715,7 +720,7 @@ where
                         }
                     }
 
-                    let (retry_after, need_retry) = check_need_retry(&e, retry_count, max_retry_count, operation);
+                    let (retry_after, need_retry) = check_need_retry(&e, retry_count, max_retry_count, operation, &config_holder.retryable_409_ecs);
                     if !need_retry {
                         if let Some(request_url) = ac.request_url {
                             e.set_request_url(request_url);

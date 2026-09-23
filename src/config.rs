@@ -17,7 +17,7 @@ use super::constant::*;
 use super::error::{GenericError, TosError};
 use super::internal::url_encode_with_safe;
 use crate::enumeration::AsyncFileUploadReaderMode;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use url::Url;
 
 #[derive(Debug, Clone)]
@@ -49,6 +49,7 @@ pub(crate) struct ConfigHolder {
     pub(crate) client_key: String,
     pub(crate) ca_crt: String,
     pub(crate) async_file_upload_reader_mode: AsyncFileUploadReaderMode,
+    pub(crate) retryable_409_ecs: HashSet<String>,
 
     pub(crate) user_agent: String,
     pub(crate) region: String,
@@ -97,6 +98,7 @@ impl Default for ConfigHolder {
             schema_control: "".to_string(),
             domain_control: "".to_string(),
             ca_crt: "".to_string(),
+            retryable_409_ecs: Default::default(),
         }
     }
 }
@@ -170,11 +172,11 @@ impl ConfigHolder {
             && self.user_agent_soft_name == ""
             && self.user_agent_soft_version == ""
             && (self.user_agent_customized_key_values.is_none()
-                || self
-                    .user_agent_customized_key_values
-                    .as_ref()
-                    .unwrap()
-                    .is_empty())
+            || self
+            .user_agent_customized_key_values
+            .as_ref()
+            .unwrap()
+            .is_empty())
         {
             self.user_agent = String::from(
                 "ve-tos-rust-sdk/".to_string()

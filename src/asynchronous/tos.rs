@@ -122,7 +122,7 @@ use bytes::Bytes;
 use futures_core::future::BoxFuture;
 use futures_core::Stream;
 use reqwest::{redirect, Body, Client, Proxy, RequestBuilder};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
@@ -548,6 +548,11 @@ where
         self
     }
 
+    pub fn retryable_409_ecs(mut self, retryable_409_ecs: HashSet<String>) -> Self {
+        self.config_holder.retryable_409_ecs = retryable_409_ecs;
+        self
+    }
+
     #[cfg(any(feature = "use-native-tls", feature = "use-rustls"))]
     pub fn client_crt(mut self, client_crt: impl Into<String>) -> Self {
         self.config_holder.client_crt = client_crt.into();
@@ -571,8 +576,7 @@ where
     }
 }
 
-pub fn builder<S>(
-) -> TosClientBuilder<CommonCredentialsProvider<CommonCredentials>, CommonCredentials, S>
+pub fn builder<S>() -> TosClientBuilder<CommonCredentialsProvider<CommonCredentials>, CommonCredentials, S>
 where
     S: AsyncRuntime + Default,
 {
@@ -685,7 +689,7 @@ pub fn new_stream_nocopy(data: impl Into<Vec<u8>>) -> BufferStream {
 
 #[async_trait]
 pub trait TosClient:
-    BucketAPI + ObjectAPI + MultipartAPI + PaginatorAPI + ControlAPI + SignerAPI + ConfigAware
+BucketAPI + ObjectAPI + MultipartAPI + PaginatorAPI + ControlAPI + SignerAPI + ConfigAware
 {
     fn refresh_credentials(
         &self,
@@ -757,7 +761,7 @@ where
 {
     async fn put_object<B>(&self, input: &PutObjectInput<B>) -> Result<PutObjectOutput, TosError>
     where
-        B: Stream<Item = Result<Bytes, crate::error::CommonError>> + Send + Sync + Unpin + 'static,
+        B: Stream<Item=Result<Bytes, crate::error::CommonError>> + Send + Sync + Unpin + 'static,
     {
         self.do_request(input).await
     }
@@ -897,7 +901,7 @@ where
         input: &AppendObjectInput<B>,
     ) -> Result<AppendObjectOutput, TosError>
     where
-        B: Stream<Item = Result<Bytes, crate::error::CommonError>> + Send + Sync + Unpin + 'static,
+        B: Stream<Item=Result<Bytes, crate::error::CommonError>> + Send + Sync + Unpin + 'static,
     {
         let mut hinput = GetBucketTypeInput::new(input.bucket());
         hinput.set_request_host(input.request_host());
@@ -1787,7 +1791,7 @@ where
 
     async fn upload_part<B>(&self, input: &UploadPartInput<B>) -> Result<UploadPartOutput, TosError>
     where
-        B: Stream<Item = Result<Bytes, crate::error::CommonError>> + Send + Sync + Unpin + 'static,
+        B: Stream<Item=Result<Bytes, crate::error::CommonError>> + Send + Sync + Unpin + 'static,
     {
         self.do_request(input).await
     }
@@ -1982,6 +1986,7 @@ where
             client_key: c.client_key.clone(),
             ca_crt: c.ca_crt.clone(),
             async_file_upload_reader_mode: c.async_file_upload_reader_mode,
+            retryable_409_ecs: c.retryable_409_ecs.clone(),
             user_agent: c.user_agent.clone(),
             region: "".to_string(),
             schema: "".to_string(),
@@ -2031,7 +2036,7 @@ where
         input: &ModifyObjectInput<B>,
     ) -> Result<ModifyObjectOutput, TosError>
     where
-        B: Stream<Item = Result<Bytes, crate::error::CommonError>> + Send + Sync + Unpin + 'static,
+        B: Stream<Item=Result<Bytes, crate::error::CommonError>> + Send + Sync + Unpin + 'static,
     {
         self.do_request(input).await
     }
@@ -2056,7 +2061,7 @@ where
     where
         T: InputTranslator<B>,
         K: OutputParser + RequestInfoTrait + Send,
-        B: Stream<Item = Result<Bytes, crate::error::CommonError>> + Send + Unpin + 'static,
+        B: Stream<Item=Result<Bytes, crate::error::CommonError>> + Send + Unpin + 'static,
     {
         self.do_request_common::<T, MockAsyncInputTranslator, K, B>(Some(input), None)
             .await
@@ -2071,7 +2076,7 @@ where
         T: InputTranslator<B>,
         F: AsyncInputTranslator<B>,
         K: OutputParser + RequestInfoTrait + Send,
-        B: Stream<Item = Result<Bytes, crate::error::CommonError>> + Send + Unpin + 'static,
+        B: Stream<Item=Result<Bytes, crate::error::CommonError>> + Send + Unpin + 'static,
     {
         let config_holder = self.config_holder.load();
         let (operation, bucket, key);
@@ -2157,7 +2162,7 @@ where
                     }
 
                     let (retry_after, need_retry) =
-                        check_need_retry(&e, retry_count, max_retry_count, operation);
+                        check_need_retry(&e, retry_count, max_retry_count, operation, &config_holder.retryable_409_ecs);
                     if !need_retry {
                         if let Some(request_url) = ac.request_url {
                             e.set_request_url(request_url);
@@ -2196,7 +2201,7 @@ where
         T: InputTranslator<B>,
         F: AsyncInputTranslator<B>,
         K: OutputParser + Send,
-        B: Stream<Item = Result<Bytes, crate::error::CommonError>> + Send + Unpin + 'static,
+        B: Stream<Item=Result<Bytes, crate::error::CommonError>> + Send + Unpin + 'static,
         'b: 'a,
     {
         let mut request;
@@ -2238,7 +2243,7 @@ where
         ac: &mut AdditionalContext<'a>,
     ) -> Result<HttpResponse, TosError>
     where
-        B: Stream<Item = Result<Bytes, crate::error::CommonError>> + Send + Unpin + 'static,
+        B: Stream<Item=Result<Bytes, crate::error::CommonError>> + Send + Unpin + 'static,
         'a: 'c,
     {
         let config_holder = self.config_holder.load();
@@ -2369,7 +2374,7 @@ where
 
     fn add_body<B>(&self, rb: RequestBuilder, body: B, _: i64) -> RequestBuilder
     where
-        B: Stream<Item = Result<Bytes, crate::error::CommonError>> + Send + 'static,
+        B: Stream<Item=Result<Bytes, crate::error::CommonError>> + Send + 'static,
     {
         rb.body(Body::wrap_stream(body))
     }

@@ -31,7 +31,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Certificate, Identity};
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::str::FromStr;
@@ -828,7 +828,7 @@ pub(crate) fn check_account_id(account_id: &str) -> Result<(), TosError> {
     Ok(())
 }
 
-pub(crate) fn check_need_retry(e: &TosError, retry_count: isize, max_retry_count: isize, operation: &str) -> (isize, bool) {
+pub(crate) fn check_need_retry(e: &TosError, retry_count: isize, max_retry_count: isize, operation: &str, retryable_409_ecs: &HashSet<String>) -> (isize, bool) {
     if retry_count >= max_retry_count {
         return (0, false);
     }
@@ -844,7 +844,7 @@ pub(crate) fn check_need_retry(e: &TosError, retry_count: isize, max_retry_count
                 _ => (0, false),
             }
         }
-        TosServerError { status_code, header, .. } => {
+        TosServerError { status_code, header, ec, .. } => {
             if *status_code == 408 {
                 return (0, timeout_retryable(operation));
             }
@@ -859,6 +859,10 @@ pub(crate) fn check_need_retry(e: &TosError, retry_count: isize, max_retry_count
                         return (y, server_error_retryable(operation));
                     }
                 }
+                return (0, server_error_retryable(operation));
+            }
+
+            if *status_code == 409 && retryable_409_ecs.contains(ec) {
                 return (0, server_error_retryable(operation));
             }
 
